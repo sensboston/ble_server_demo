@@ -66,6 +66,8 @@ env/
 .ccls-cache/
 compile_commands.json
 
+CLAUDE.md
+
 # Windows specific
 Thumbs.db
 ehthumbs.db
