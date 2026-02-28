@@ -698,6 +698,7 @@ void web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable  = true;
     config.max_uri_handlers  = 14;
+    config.stack_size        = 8192;
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) {

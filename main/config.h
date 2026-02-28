@@ -33,7 +33,7 @@
 // --- FreeRTOS task stack sizes ---
 #define BLE_TASK_STACK          4096
 #define WIFI_TASK_STACK         6144
-#define LED_ANIM_TASK_STACK     2048
+#define LED_ANIM_TASK_STACK     4096
 
 // --- Web log ring buffer ---
 #define LOG_MAX_DEVICES         8
