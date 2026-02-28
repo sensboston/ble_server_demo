@@ -28,6 +28,9 @@ typedef struct __attribute__((packed)) {
     uint16_t data_offset;   // Offset into data pool (0xFFFF = no data)
 } log_entry_t;
 
+// Initialize logging subsystem (mutex) - call once in app_main before any tasks
+void web_log_init(void);
+
 // Initialize and start HTTP web server
 void web_server_start(void);
 

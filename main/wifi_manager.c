@@ -90,8 +90,11 @@ void wifi_manager_start(void)
     // Initialize TCP/IP stack
     ESP_ERROR_CHECK(esp_netif_init());
 
-    // Create default event loop if not already created
-    esp_event_loop_create_default();
+    // Create default event loop (ESP_ERR_INVALID_STATE means it already exists)
+    esp_err_t loop_err = esp_event_loop_create_default();
+    if (loop_err != ESP_OK && loop_err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(loop_err);
+    }
 
     // Create default netif interfaces for STA and AP modes
     esp_netif_create_default_wifi_sta();

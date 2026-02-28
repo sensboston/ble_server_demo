@@ -30,7 +30,7 @@ static uint16_t data_pool_pos = 0;  // Next write position (wraps around)
 
 static SemaphoreHandle_t log_mutex;
 
-// --- Internal helpers ---
+// --- Internal helpers (caller must hold log_mutex) ---
 
 // Find or register a device address, return its index
 static uint8_t get_device_idx(const uint8_t *bd_addr)
@@ -67,12 +67,23 @@ static uint16_t store_data(const char *value)
     return offset;
 }
 
+// Find or register a characteristic UUID, return its index
+static uint8_t find_or_add_char(uint16_t uuid)
+{
+    for (uint8_t i = 0; i < char_count; i++) {
+        if (char_uuids[i] == uuid) return i;
+    }
+    if (char_count < LOG_MAX_CHARS) {
+        char_uuids[char_count] = uuid;
+        return char_count++;
+    }
+    return 0xFF;
+}
+
 // Add a log entry to ring buffer
 static void log_add(uint8_t device_idx, ble_event_type_t event,
                     uint8_t char_idx, uint16_t data_offset)
 {
-    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
-
     uint16_t idx = (log_head + log_count) % LOG_MAX_ENTRIES;
 
     if (log_count >= LOG_MAX_ENTRIES) {
@@ -87,51 +98,59 @@ static void log_add(uint8_t device_idx, ble_event_type_t event,
     log_entries[idx].event_type   = (uint8_t)event;
     log_entries[idx].char_idx     = char_idx;
     log_entries[idx].data_offset  = data_offset;
-
-    xSemaphoreGive(log_mutex);
 }
 
 // --- Public API ---
 
+// Initialize logging mutex - must be called once in app_main before any tasks start
+void web_log_init(void)
+{
+    log_mutex = xSemaphoreCreateMutex();
+}
+
 // Register a characteristic UUID - returns its index
 uint8_t web_log_register_char(uint16_t uuid)
 {
-    for (uint8_t i = 0; i < char_count; i++) {
-        if (char_uuids[i] == uuid) return i;
-    }
-    if (char_count < LOG_MAX_CHARS) {
-        char_uuids[char_count] = uuid;
-        return char_count++;
-    }
-    return 0xFF;
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return 0xFF;
+    uint8_t idx = find_or_add_char(uuid);
+    xSemaphoreGive(log_mutex);
+    return idx;
 }
 
 void web_log_connect(const uint8_t *bd_addr)
 {
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     uint8_t didx = get_device_idx(bd_addr);
     log_add(didx, BLE_EVT_CONNECT, 0xFF, 0xFFFF);
+    xSemaphoreGive(log_mutex);
 }
 
 void web_log_disconnect(const uint8_t *bd_addr)
 {
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     uint8_t didx = get_device_idx(bd_addr);
     log_add(didx, BLE_EVT_DISCONNECT, 0xFF, 0xFFFF);
+    xSemaphoreGive(log_mutex);
 }
 
 void web_log_read(const uint8_t *bd_addr, uint16_t char_uuid, const char *value)
 {
-    uint8_t  didx  = get_device_idx(bd_addr);
-    uint8_t  cidx  = web_log_register_char(char_uuid);
-    uint16_t doff  = store_data(value);
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    uint8_t  didx = get_device_idx(bd_addr);
+    uint8_t  cidx = find_or_add_char(char_uuid);
+    uint16_t doff = store_data(value);
     log_add(didx, BLE_EVT_READ, cidx, doff);
+    xSemaphoreGive(log_mutex);
 }
 
 void web_log_write(const uint8_t *bd_addr, uint16_t char_uuid, const char *value)
 {
-    uint8_t  didx  = get_device_idx(bd_addr);
-    uint8_t  cidx  = web_log_register_char(char_uuid);
-    uint16_t doff  = store_data(value);
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    uint8_t  didx = get_device_idx(bd_addr);
+    uint8_t  cidx = find_or_add_char(char_uuid);
+    uint16_t doff = store_data(value);
     log_add(didx, BLE_EVT_WRITE, cidx, doff);
+    xSemaphoreGive(log_mutex);
 }
 
 // --- HTTP handlers ---
@@ -193,8 +212,16 @@ static esp_err_t root_handler(httpd_req_t *req)
 // Serve log as JSON array
 static esp_err_t log_handler(httpd_req_t *req)
 {
-    // Allocate response buffer - each JSON entry ~120 chars
-    size_t buf_size = log_count * 130 + 8;
+    // Snapshot log_count under mutex to safely size the buffer
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    uint16_t snapshot_count = log_count;
+    xSemaphoreGive(log_mutex);
+
+    // 160 bytes per entry (conservative upper bound), plus brackets
+    size_t buf_size = (size_t)snapshot_count * 160 + 8;
     if (buf_size < 256) buf_size = 256;
 
     char *buf = malloc(buf_size);
@@ -209,10 +236,13 @@ static esp_err_t log_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    // Render at most snapshot_count entries to stay within the allocated buffer
+    uint16_t render_count = log_count < snapshot_count ? log_count : snapshot_count;
+
     int pos = 0;
     buf[pos++] = '[';
 
-    for (uint16_t i = 0; i < log_count; i++) {
+    for (uint16_t i = 0; i < render_count; i++) {
         uint16_t idx = (log_head + i) % LOG_MAX_ENTRIES;
         log_entry_t *e = &log_entries[idx];
 
@@ -238,13 +268,14 @@ static esp_err_t log_handler(httpd_req_t *req)
         uint32_t sec = e->timestamp_ms / 1000;
         uint32_t ms  = e->timestamp_ms % 1000;
 
-        pos += snprintf(buf + pos, 130,
-                        "%s{\"t\":\"%lu.%03lu\",\"ev\":\"%s\","
-                        "\"dev\":\"%s\",\"ch\":\"%s\",\"d\":\"%s\"}",
-                        i > 0 ? "," : "",
-                        sec, ms,
-                        event_name(e->event_type),
-                        dev_str, char_str, data_str);
+        int written = snprintf(buf + pos, buf_size - (size_t)pos - 2,
+                               "%s{\"t\":\"%lu.%03lu\",\"ev\":\"%s\","
+                               "\"dev\":\"%s\",\"ch\":\"%s\",\"d\":\"%s\"}",
+                               i > 0 ? "," : "",
+                               sec, ms,
+                               event_name(e->event_type),
+                               dev_str, char_str, data_str);
+        if (written > 0) pos += written;
     }
 
     buf[pos++] = ']';
@@ -261,7 +292,7 @@ static esp_err_t log_handler(httpd_req_t *req)
 // Initialize and start HTTP web server
 void web_server_start(void)
 {
-    log_mutex = xSemaphoreCreateMutex();
+    // Note: log_mutex is created in web_log_init() during app_main startup
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;

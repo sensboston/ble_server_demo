@@ -58,6 +58,9 @@ void app_main(void)
     led_strip_refresh(led_strip);
     ESP_LOGI(TAG, "LED initialized");
 
+    // Initialize BLE event logging mutex before any tasks start
+    web_log_init();
+
     // Start BLE and WiFi as independent FreeRTOS tasks
     xTaskCreate(ble_task,  "ble_task",  BLE_TASK_STACK,  NULL, 5, NULL);
     xTaskCreate(wifi_task, "wifi_task", WIFI_TASK_STACK, NULL, 5, NULL);

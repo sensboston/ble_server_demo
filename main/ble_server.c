@@ -33,6 +33,10 @@
 // Default value if NVS is empty
 #define DEFAULT_VALUE       "hello"
 
+// In-RAM cache for the characteristic value to avoid NVS reads on every BLE READ
+static char   cached_value[MAX_VALUE_LEN + 1];
+static size_t cached_len;
+
 // Duration of read/write flash before returning to connected color (ms)
 #define LED_FLASH_DURATION_MS 300
 
@@ -41,9 +45,6 @@
 
 static uint16_t service_handle;
 static uint16_t char_handle;
-
-// Characteristic index registered with web logger
-static uint8_t char_log_idx = 0xFF;
 
 // Current connected client address (for logging)
 static uint8_t connected_bd_addr[6];
@@ -175,9 +176,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         ESP_LOGI(TAG, "GATTS registered, app_id: %d", param->reg.app_id);
         esp_ble_gap_set_device_name(DEVICE_NAME);
 
-        // Register characteristic UUID with web logger
-        char_log_idx = web_log_register_char(CHAR_UUID);
-
         // Create service with 4 handles (service + characteristic + descriptor)
         esp_gatt_srvc_id_t service_id = {
             .is_primary = true,
@@ -204,21 +202,20 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             .uuid = { .uuid16 = CHAR_UUID }
         };
 
-        // Read initial value from NVS, use default if not found
-        char init_val[MAX_VALUE_LEN] = DEFAULT_VALUE;
-        size_t len = sizeof(init_val);
-        if (nvs_read_value(init_val, &len) != ESP_OK) {
+        // Load value from NVS into cache, use default if not found
+        cached_len = sizeof(cached_value);
+        if (nvs_read_value(cached_value, &cached_len) != ESP_OK) {
             ESP_LOGI(TAG, "No NVS value found, using default: %s", DEFAULT_VALUE);
-            strncpy(init_val, DEFAULT_VALUE, sizeof(init_val));
-            len = strlen(DEFAULT_VALUE);
+            strncpy(cached_value, DEFAULT_VALUE, sizeof(cached_value));
+            cached_len = strlen(DEFAULT_VALUE);
         } else {
-            ESP_LOGI(TAG, "Loaded value from NVS: %s", init_val);
+            ESP_LOGI(TAG, "Loaded value from NVS: %s", cached_value);
         }
 
         esp_attr_value_t char_val = {
             .attr_max_len = MAX_VALUE_LEN,
-            .attr_len     = len,
-            .attr_value   = (uint8_t *)init_val
+            .attr_len     = cached_len,
+            .attr_value   = (uint8_t *)cached_value
         };
         esp_ble_gatts_add_char(service_handle, &char_uuid,
                                ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
@@ -277,24 +274,16 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         // Flash blue for read operation
         led_flash_operation(true);
 
-        // Read current value from NVS
-        char buf[MAX_VALUE_LEN] = DEFAULT_VALUE;
-        size_t len = sizeof(buf);
-        if (nvs_read_value(buf, &len) != ESP_OK) {
-            strncpy(buf, DEFAULT_VALUE, sizeof(buf));
-            len = strlen(DEFAULT_VALUE);
-        }
+        web_log_read(connected_bd_addr, CHAR_UUID, cached_value);
 
-        web_log_read(connected_bd_addr, CHAR_UUID, buf);
-
-        // Send response to client
+        // Send cached value to client (no NVS access needed)
         esp_gatt_rsp_t rsp = {0};
         rsp.attr_value.handle = param->read.handle;
-        rsp.attr_value.len    = len;
-        memcpy(rsp.attr_value.value, buf, len);
+        rsp.attr_value.len    = cached_len;
+        memcpy(rsp.attr_value.value, cached_value, cached_len);
         esp_ble_gatts_send_response(gatts_if, param->read.conn_id,
                                     param->read.trans_id, ESP_GATT_OK, &rsp);
-        ESP_LOGI(TAG, "Read response sent: %s", buf);
+        ESP_LOGI(TAG, "Read response sent: %s", cached_value);
         break;
     }
     case ESP_GATTS_WRITE_EVT: {
@@ -304,18 +293,18 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         // Flash red for write operation
         led_flash_operation(false);
 
-        // Null-terminate and save to NVS
-        char buf[MAX_VALUE_LEN + 1] = {0};
-        size_t len = param->write.len < MAX_VALUE_LEN ? param->write.len : MAX_VALUE_LEN;
-        memcpy(buf, param->write.value, len);
+        // Update cache and persist to NVS
+        cached_len = param->write.len < MAX_VALUE_LEN ? param->write.len : MAX_VALUE_LEN;
+        memcpy(cached_value, param->write.value, cached_len);
+        cached_value[cached_len] = '\0';
 
-        esp_err_t ret = nvs_write_value(buf);
+        esp_err_t ret = nvs_write_value(cached_value);
         if (ret == ESP_OK)
-            ESP_LOGI(TAG, "Value saved to NVS: %s", buf);
+            ESP_LOGI(TAG, "Value saved to NVS: %s", cached_value);
         else
             ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(ret));
 
-        web_log_write(connected_bd_addr, CHAR_UUID, buf);
+        web_log_write(connected_bd_addr, CHAR_UUID, cached_value);
 
         // Send write response if requested
         if (param->write.need_rsp) {
