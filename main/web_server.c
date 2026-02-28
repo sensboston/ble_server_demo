@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "ble_server.h"
+#include "led_controller.h"
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
@@ -334,6 +335,33 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<div class='lbl'>New value:</div>"
         "<input class='inp' id='newVal' type='text' maxlength='20' placeholder='enter value...'>"
         "<button onclick='writeVal()'>Write to NVS</button>"
+        "<hr style='border:none;border-top:1px solid var(--bd);margin:12px 0'>"
+        "<div class='lbl'>LED Color:</div>"
+        "<div id='clrPrev' style='height:22px;border-radius:3px;margin-bottom:8px;"
+        "border:1px solid var(--bd);background:#ff0000'></div>"
+        "<div class='row'>"
+        "<span id='labR' style='flex:0 0 42px;font-size:11px;color:#f77'>R: 255</span>"
+        "<input type='range' id='slR' min='0' max='255' value='255' style='flex:1;"
+        "accent-color:#f77' oninput='upClr()'>"
+        "</div>"
+        "<div class='row'>"
+        "<span id='labG' style='flex:0 0 42px;font-size:11px;color:#7f7'>G: 0</span>"
+        "<input type='range' id='slG' min='0' max='255' value='0' style='flex:1;"
+        "accent-color:#7f7' oninput='upClr()'>"
+        "</div>"
+        "<div class='row'>"
+        "<span id='labB' style='flex:0 0 42px;font-size:11px;color:#77f'>B: 0</span>"
+        "<input type='range' id='slB' min='0' max='255' value='0' style='flex:1;"
+        "accent-color:#77f' oninput='upClr()'>"
+        "</div>"
+        "<button onclick='setLedColor()' style='margin-bottom:10px'>Set Color</button>"
+        "<div class='lbl'>LED Animation:</div>"
+        "<div class='row'>"
+        "<button id='btnOff'    onclick='setLedAnim(\"off\")'>Off</button>"
+        "<button id='btnFade'   onclick='setLedAnim(\"fade\")'>Fade</button>"
+        "<button id='btnFire'   onclick='setLedAnim(\"fire\")'>Fire</button>"
+        "<button id='btnRainbow' onclick='setLedAnim(\"rainbow\")'>Rainbow</button>"
+        "</div>"
         "</div>"
         "<div class='pane' id='p1'>"
         "<table><thead>"
@@ -388,12 +416,40 @@ static esp_err_t root_handler(httpd_req_t *req)
         "fetch('/value',{method:'POST',body:v}).then(r=>r.json()).then(d=>{"
         "document.getElementById('curVal').textContent=d.value;"
         "document.getElementById('newVal').value='';});}"
+        "var ledAnims=['btnOff','btnFade','btnFire','btnRainbow'];"
+        "function setLedActive(id){"
+        "ledAnims.forEach(function(a){document.getElementById(a).className='';});"
+        "if(id)document.getElementById(id).className='on';}"
+        "function upClr(){"
+        "var r=document.getElementById('slR').value|0;"
+        "var g=document.getElementById('slG').value|0;"
+        "var b=document.getElementById('slB').value|0;"
+        "document.getElementById('labR').textContent='R: '+r;"
+        "document.getElementById('labG').textContent='G: '+g;"
+        "document.getElementById('labB').textContent='B: '+b;"
+        "var h=((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');"
+        "document.getElementById('clrPrev').style.background='#'+h;}"
+        "function setLedColor(){"
+        "var r=document.getElementById('slR').value|0;"
+        "var g=document.getElementById('slG').value|0;"
+        "var b=document.getElementById('slB').value|0;"
+        "var h=((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');"
+        "fetch('/led/color',{method:'POST',body:h}).then(function(){setLedActive(null);});}"
+        "function setLedAnim(a){"
+        "var ids={'off':'btnOff','fade':'btnFade','fire':'btnFire','rainbow':'btnRainbow'};"
+        "fetch('/led/anim',{method:'POST',body:a}).then(function(){setLedActive(ids[a]);});}"
+        "function setSliders(h){"
+        "document.getElementById('slR').value=parseInt(h.substring(0,2),16);"
+        "document.getElementById('slG').value=parseInt(h.substring(2,4),16);"
+        "document.getElementById('slB').value=parseInt(h.substring(4,6),16);"
+        "upClr();}"
         "function fState(){"
         "fetch('/state').then(r=>r.json()).then(s=>{"
         "on=s.ble;ln=s.log;"
         "document.documentElement.className=s.theme==='light'?'light':'';"
         "localStorage.setItem('t',s.theme);"
-        "upBtns();});}"
+        "upBtns();"
+        "if(s.led&&s.led.length===6)setSliders(s.led);});}"
         "function upd(){"
         "fetch('/log').then(r=>r.json()).then(d=>{"
         "var h='';"
@@ -441,6 +497,30 @@ static esp_err_t value_post_handler(httpd_req_t *req)
     snprintf(resp, sizeof(resp), "{\"value\":\"%s\"}", val);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /led/color - body: "RRGGBB" hex
+static esp_err_t led_color_handler(httpd_req_t *req)
+{
+    char body[8] = {0};
+    int  recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
+    body[recv] = '\0';
+    led_ctrl_apply_command(body);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /led/anim - body: "fade" | "fire" | "rainbow" | "off"
+static esp_err_t led_anim_handler(httpd_req_t *req)
+{
+    char body[10] = {0};
+    int  recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
+    body[recv] = '\0';
+    led_ctrl_apply_command(body);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
 // Serve log as JSON array
@@ -521,14 +601,16 @@ static esp_err_t log_handler(httpd_req_t *req)
     return ret;
 }
 
-// Return current state as JSON {ble, log, theme}
+// Return current state as JSON {ble, log, theme, led}
 static esp_err_t state_handler(httpd_req_t *req)
 {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "{\"ble\":%s,\"log\":%s,\"theme\":\"%s\"}",
+    char led_cmd[9] = {0};
+    led_ctrl_get_command(led_cmd, sizeof(led_cmd));
+    char buf[96];
+    snprintf(buf, sizeof(buf), "{\"ble\":%s,\"log\":%s,\"theme\":\"%s\",\"led\":\"%s\"}",
              s_ble_enabled ? "true" : "false",
              s_log_enabled ? "true" : "false",
-             s_theme);
+             s_theme, led_cmd);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
 }
@@ -648,7 +730,8 @@ void web_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable  = true;
-    config.max_uri_handlers  = 12;
+    config.max_uri_handlers  = 14;
+    config.stack_size        = 8192;
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -669,6 +752,8 @@ void web_server_start(void)
         { "/clear",        HTTP_POST, clear_handler,      NULL },
         { "/reset-wifi",   HTTP_POST, reset_wifi_handler, NULL },
         { "/value",        HTTP_POST, value_post_handler, NULL },
+        { "/led/color",   HTTP_POST, led_color_handler,  NULL },
+        { "/led/anim",    HTTP_POST, led_anim_handler,   NULL },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(server, &uris[i]);

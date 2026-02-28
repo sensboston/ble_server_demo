@@ -297,9 +297,8 @@ void oled_puts_large(uint8_t page, uint8_t col, const char *text)
 //   rows 0–6    : line 0  → page 0, bits 0–6  (no shift)
 //   rows 7–11   : gap 5px (blank)
 //   rows 12–18  : line 1  → page 1 bits 4–7, page 2 bits 0–2
-//   rows 19–23  : gap 5px (blank)
-//   rows 24–30  : line 2  → page 3, bits 0–6  (no shift)
-//   row  31     : blank   (font bit 7 is always 0)
+//   rows 19–24  : gap 6px (blank)
+//   rows 25–31  : line 2  → page 3, bits 1–7  (1-bit shift)
 //
 // Called with s_oled_mutex already held.
 static void render_display(void)
@@ -332,8 +331,8 @@ static void render_display(void)
                     page[2][col] |= (uint8_t)((b >> 4) & 0x07);
                     break;
                 case 2:
-                    // rows 24–30: page 3 bits 0–6 (no shift)
-                    page[3][col] |= b;
+                    // rows 25–31: page 3 bits 1–7 (+1 shift)
+                    page[3][col] |= (uint8_t)(b << 1);
                     break;
                 }
             }
