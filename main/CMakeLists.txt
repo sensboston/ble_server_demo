@@ -1,3 +1,3 @@
-idf_component_register(SRCS "main.c" "ble_server.c" "wifi_manager.c" "web_server.c" "ntp_sync.c"
+idf_component_register(SRCS "main.c" "ble_server.c" "wifi_manager.c" "web_server.c" "ntp_sync.c" "oled_display.c"
                     INCLUDE_DIRS "."
-                    PRIV_REQUIRES bt nvs_flash led_strip esp_wifi esp_event esp_netif esp_http_server lwip)
+                    PRIV_REQUIRES bt nvs_flash led_strip esp_wifi esp_event esp_netif esp_http_server lwip driver)

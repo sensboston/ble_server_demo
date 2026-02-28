@@ -1,5 +1,7 @@
+#include <stdio.h>
 #include <string.h>
 #include "ble_server.h"
+#include "oled_display.h"
 #include "web_server.h"
 #include "config.h"
 #include "nvs_flash.h"
@@ -253,6 +255,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         };
         esp_ble_gap_config_adv_data(&adv_data);
         esp_ble_gap_start_advertising(&adv_params);
+        oled_set_line(1, "ADVERTISING");
         break;
     }
     case ESP_GATTS_CONNECT_EVT:
@@ -263,6 +266,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         memcpy(connected_bd_addr, param->connect.remote_bda, 6);
         led_connected();
         web_log_connect(connected_bd_addr);
+        oled_set_line(1, "CONNECTED");
         break;
 
     case ESP_GATTS_DISCONNECT_EVT:
@@ -273,6 +277,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         led_off();
         if (s_ble_enabled)
             esp_ble_gap_start_advertising(&adv_params);
+        oled_set_line(1, s_ble_enabled ? "ADVERTISING" : "DISABLED");
         break;
 
     case ESP_GATTS_READ_EVT: {
@@ -283,6 +288,11 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         led_flash_operation(true);
 
         web_log_read(connected_bd_addr, BLE_CHAR_UUID, cached_value);
+        {
+            char oled_buf[22];
+            snprintf(oled_buf, sizeof(oled_buf), "R: %.18s", cached_value);
+            oled_set_line(2, oled_buf);
+        }
 
         // Send cached value to client (no NVS access needed)
         esp_gatt_rsp_t rsp = {0};
@@ -324,6 +334,11 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(ret));
 
         web_log_write(connected_bd_addr, BLE_CHAR_UUID, cached_value);
+        {
+            char oled_buf[22];
+            snprintf(oled_buf, sizeof(oled_buf), "W: %.18s", cached_value);
+            oled_set_line(2, oled_buf);
+        }
 
         if (param->write.need_rsp)
             esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
@@ -342,9 +357,11 @@ void ble_set_enabled(bool enabled)
         esp_ble_gap_stop_advertising();
         if (current_conn_id != 0xFFFF)
             esp_ble_gatts_close(current_gatts_if, current_conn_id);
+        oled_set_line(1, "DISABLED");
     } else {
         if (!is_connected)
             esp_ble_gap_start_advertising(&adv_params);
+        oled_set_line(1, is_connected ? "CONNECTED" : "ADVERTISING");
     }
 }
 

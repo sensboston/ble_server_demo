@@ -1,6 +1,6 @@
 # BLE Server Demo
 
-An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, WiFi captive portal provisioning, NTP time sync, and a browser-based monitoring interface — all running concurrently on a single chip.
+An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, WiFi captive portal provisioning, NTP time sync, an OLED status display, and a browser-based monitoring interface — all running concurrently on a single chip.
 
 ## Hardware
 
@@ -9,6 +9,7 @@ An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, WiF
 | SoC | ESP32-C3 (RISC-V, BLE 5.0, no Classic BT) |
 | Flash | 2 MB |
 | LED | WS2812 RGB on GPIO 8 |
+| OLED | SSD1306 128×32, I2C — SDA GPIO 5, SCL GPIO 6 |
 
 ## Features
 
@@ -34,6 +35,15 @@ When no WiFi credentials are stored, the device opens a SoftAP (`ESP32_XXXXXX`) 
 - Toggle BLE advertising on/off
 - Trigger WiFi credential reset
 
+### OLED Status Display
+128×32 SSD1306 driven over I2C with a custom driver (no external components):
+
+- **3 lines** with 5 px gaps, rendered via cross-page bit-shifting across the 4 SSD1306 pages
+- **Line 0** — BLE device name (static) / "WiFi Setup" during provisioning
+- **Line 1** — BLE status: `ADVERTISING` / `CONNECTED` / `DISABLED`
+- **Line 2** — WiFi: `Connecting...` → `IP:x.x.x.x`; updated with last BLE op (`R: val` / `W: val`)
+- Thread-safe: FreeRTOS mutex guards all I2C access from BLE callbacks and WiFi events
+
 ### NTP Time Sync
 - Syncs on WiFi connect; timezone EST5EDT (configurable in `config.h`)
 - Log timestamps switch from boot-relative to real time automatically
@@ -42,13 +52,14 @@ When no WiFi credentials are stored, the device opens a SoftAP (`ESP32_XXXXXX`) 
 
 ```
 main/
-  config.h        — all tunable constants (UUIDs, GPIO, task stacks, log size)
-  main.c          — app_main: NVS init, LED init, launch BLE + WiFi tasks
-  ble_server.c    — GATT server, LED control, NVS persistence
-  wifi_manager.c  — captive portal provisioning + normal STA connection
-  ntp_sync.c      — SNTP client
-  web_server.c    — HTTP monitor, ring-buffer event log
-partitions.csv    — custom partition table (factory 1.875 MB, ~500 KB headroom)
+  config.h         — all tunable constants (UUIDs, GPIO, OLED, task stacks, log size)
+  main.c           — app_main: NVS init, LED init, OLED init, launch BLE + WiFi tasks
+  ble_server.c     — GATT server, LED control, NVS persistence
+  wifi_manager.c   — captive portal provisioning + normal STA connection
+  ntp_sync.c       — SNTP client
+  web_server.c     — HTTP monitor, ring-buffer event log
+  oled_display.c   — SSD1306 driver: I2C init, 5×7 font, cross-page line rendering
+partitions.csv     — custom partition table (factory 1.875 MB, ~500 KB headroom)
 sdkconfig.defaults — enables custom partition table
 ```
 

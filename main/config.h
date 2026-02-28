@@ -15,6 +15,12 @@
 #define BLE_MAX_VALUE_LEN       20
 #define BLE_DEFAULT_VALUE       "hello"
 
+// --- OLED SSD1306 (128×32, I2C) ---
+#define OLED_SDA_GPIO           5
+#define OLED_SCL_GPIO           6
+#define OLED_I2C_ADDR           0x3C
+#define OLED_I2C_FREQ_HZ        400000
+
 // --- WS2812 LED ---
 #define LED_GPIO                8
 #define LED_BRIGHTNESS          32

@@ -9,6 +9,7 @@
 #include "wifi_manager.h"
 #include "web_server.h"
 #include "ntp_sync.h"
+#include "oled_display.h"
 
 
 #define TAG "MAIN"
@@ -54,6 +55,13 @@ void app_main(void)
     led_strip_clear(led_strip);
     led_strip_refresh(led_strip);
     ESP_LOGI(TAG, "LED initialized");
+
+    // Initialize OLED display
+    if (oled_init() == ESP_OK) {
+        oled_set_line(0, BLE_DEVICE_NAME);
+        oled_set_line(1, "BLE: Init...");
+        oled_set_line(2, "WiFi: ...");
+    }
 
     // Initialize BLE event logging mutex, load persisted config
     web_log_init();

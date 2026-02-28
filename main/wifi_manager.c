@@ -1,5 +1,7 @@
 #include "wifi_manager.h"
+#include "oled_display.h"
 #include <string.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <sys/socket.h>
@@ -52,6 +54,9 @@ static void event_handler(void *arg, esp_event_base_t base,
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "Connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        char ip_line[22];
+        snprintf(ip_line, sizeof(ip_line), "IP:" IPSTR, IP2STR(&event->ip_info.ip));
+        oled_set_line(2, ip_line);
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }
@@ -409,6 +414,12 @@ static void start_provisioning(void)
     char ap_name[16];
     snprintf(ap_name, sizeof(ap_name), "ESP32_%02X%02X%02X", mac[3], mac[4], mac[5]);
 
+    char ap_line[22];
+    snprintf(ap_line, sizeof(ap_line), "AP: %s", ap_name);
+    oled_set_line(0, "WiFi Setup");
+    oled_set_line(1, ap_line);
+    oled_set_line(2, "192.168.4.1");
+
     // Configure open SoftAP
     wifi_config_t ap_cfg = {
         .ap = {
@@ -504,6 +515,7 @@ void wifi_manager_start(void)
 
     // Normal STA connection path
     ESP_LOGI(TAG, "Saved credentials: SSID=%s, connecting...", sta_cfg.sta.ssid);
+    oled_set_line(2, "Connecting...");
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
     // WIFI_EVENT_STA_START → event_handler → esp_wifi_connect()
