@@ -44,14 +44,22 @@ static void event_handler(void *arg, esp_event_base_t base,
             if (s_provisioning) {
                 xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
             } else {
+                wifi_event_sta_disconnected_t *disc =
+                    (wifi_event_sta_disconnected_t *)data;
+                // Wrong password: give up after 3 attempts, reboot into provisioning
+                if (disc->reason == WIFI_REASON_AUTH_FAIL && s_retry >= 3) {
+                    ESP_LOGE(TAG, "Auth failed %d times (reason %d), "
+                             "resetting to provisioning", s_retry + 1, disc->reason);
+                    wifi_manager_reset();
+                    break;
+                }
                 // Exponential backoff: 1s, 2s, 4s, 8s, cap at 16s
                 uint32_t delay_ms = (1000u << (s_retry < 4 ? s_retry : 4));
-                ESP_LOGW(TAG, "Disconnected, retrying in %lu ms (attempt %d)",
-                         delay_ms, s_retry + 1);
+                ESP_LOGW(TAG, "Disconnected (reason %d), retrying in %lu ms (attempt %d)",
+                         disc->reason, delay_ms, s_retry + 1);
                 vTaskDelay(pdMS_TO_TICKS(delay_ms));
                 s_retry++;
                 esp_wifi_connect();
-                // Reset counter on successful IP acquisition (see IP_EVENT handler)
             }
             break;
         }
@@ -290,6 +298,25 @@ static const char PROV_HTML[] =
     "};"
     "</script></body></html>";
 
+// Escape a string for use as a JSON value (handles " and \; drops control chars)
+static int json_escape(const char *src, char *dst, size_t dst_len)
+{
+    size_t pos = 0;
+    while (*src && pos < dst_len - 1) {
+        if (*src == '"' || *src == '\\') {
+            if (pos + 2 > dst_len - 1) break;
+            dst[pos++] = '\\';
+            dst[pos++] = *src++;
+        } else if ((unsigned char)*src < 0x20) {
+            src++; // drop control characters
+        } else {
+            dst[pos++] = *src++;
+        }
+    }
+    dst[pos] = '\0';
+    return (int)pos;
+}
+
 // GET /scan - return JSON array of visible SSIDs
 static esp_err_t scan_handler(httpd_req_t *req)
 {
@@ -313,17 +340,21 @@ static esp_err_t scan_handler(httpd_req_t *req)
     }
 
     // Build JSON: {"ssids":["net1","net2"],"prev":"MyNetwork"}
-    char buf[1100];
+    // Worst case: 20 SSIDs * (2 quotes + 64 escaped chars + 1 comma) + prev + wrapper
+    char buf[2048];
     int pos = snprintf(buf, sizeof(buf), "{\"ssids\":[");
     bool first = true;
     for (int i = 0; i < ap_count; i++) {
         if (aps[i].ssid[0] == '\0') continue; // Skip hidden networks
         if (!first) buf[pos++] = ',';
-        pos += snprintf(buf + pos, sizeof(buf) - pos - 20,
-                        "\"%s\"", (char *)aps[i].ssid);
+        char esc[65] = {0};
+        json_escape((char *)aps[i].ssid, esc, sizeof(esc));
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "\"%s\"", esc);
         first = false;
     }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "],\"prev\":\"%s\"}", prev_ssid);
+    char prev_esc[65] = {0};
+    json_escape(prev_ssid, prev_esc, sizeof(prev_esc));
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "],\"prev\":\"%s\"}", prev_esc);
     free(aps);
 
     httpd_resp_set_type(req, "application/json");
