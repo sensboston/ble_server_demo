@@ -7,6 +7,8 @@ An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, RGB
 
 ## Hardware
 
+![Wiring Diagram](docs/wiring.svg)
+
 | Component | Detail |
 |-----------|--------|
 | SoC | ESP32-C3 (RISC-V, BLE 5.0, no Classic BT) |
