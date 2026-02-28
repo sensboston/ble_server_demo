@@ -1,188 +1,139 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 400" width="700" height="400">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 380" width="580" height="380">
 
   <!-- Background -->
-  <rect width="700" height="400" fill="#f2f2f2" rx="8" stroke="#ccc" stroke-width="1"/>
+  <rect width="580" height="380" fill="#f2f2f2" rx="8" stroke="#ccc" stroke-width="1"/>
 
   <!-- Title -->
-  <text x="350" y="30" text-anchor="middle"
+  <text x="290" y="30" text-anchor="middle"
         font-family="sans-serif" font-size="15" font-weight="bold" fill="#222">
-    ESP32-C3 — Wiring Diagram
+    ESP32-C3 Mini — Wiring Diagram
   </text>
 
   <!-- ================================================================
-       ESP32-C3 DevKit board (center)
-       Box: x=270..430  y=60..300
+       ESP32-C3 Mini board (center-right)
+       Box: x=250..430  y=55..310
   ================================================================ -->
-  <rect x="270" y="60" width="160" height="240" rx="6"
+  <rect x="250" y="55" width="180" height="255" rx="6"
         fill="#1b4332" stroke="#40916c" stroke-width="2"/>
 
-  <!-- Chip die mock -->
-  <rect x="307" y="100" width="86" height="76" rx="3"
+  <!-- Chip die -->
+  <rect x="285" y="90" width="110" height="85" rx="3"
         fill="#2d6a4f" stroke="#52b788" stroke-width="1"/>
-  <text x="350" y="143" text-anchor="middle"
+  <text x="340" y="130" text-anchor="middle"
         font-family="monospace" font-size="11" font-weight="bold" fill="#d8f3dc">ESP32-C3</text>
-  <text x="350" y="158" text-anchor="middle"
-        font-family="monospace" font-size="8" fill="#95d5b2">RISC-V  BLE 5.0</text>
+  <text x="340" y="146" text-anchor="middle"
+        font-family="monospace" font-size="8" fill="#95d5b2">Mini  BLE 5.0</text>
 
   <!-- Board label -->
-  <text x="350" y="78" text-anchor="middle"
+  <text x="340" y="73" text-anchor="middle"
         font-family="monospace" font-size="11" font-weight="bold" fill="#95d5b2">DevKit</text>
 
+  <!-- Built-in WS2812 RGB LED (on the board itself) -->
+  <circle cx="340" cy="220" r="22" fill="#1a1a1a" stroke="#52b788" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <circle cx="340" cy="220" r="14" fill="#111"/>
+  <circle cx="334" cy="214" r="5" fill="#550000"/>
+  <circle cx="346" cy="214" r="5" fill="#005500"/>
+  <circle cx="340" cy="225" r="5" fill="#000055"/>
+  <text x="340" y="253" text-anchor="middle"
+        font-family="monospace" font-size="7" fill="#74c69d">WS2812 (built-in)</text>
+  <text x="340" y="263" text-anchor="middle"
+        font-family="monospace" font-size="7" fill="#52b788">GPIO 8</text>
+
   <!-- USB stub -->
-  <rect x="326" y="262" width="48" height="16" rx="3" fill="#222" stroke="#555" stroke-width="1"/>
-  <text x="350" y="274" text-anchor="middle"
+  <rect x="316" y="277" width="48" height="16" rx="3" fill="#222" stroke="#555" stroke-width="1"/>
+  <text x="340" y="289" text-anchor="middle"
         font-family="monospace" font-size="7" fill="#999">USB</text>
 
-  <!-- Left-side pins (x=270): GND | 3V3 | GPIO6/SCL | GPIO5/SDA -->
-  <circle cx="270" cy="140" r="5" fill="#333" stroke="#666" stroke-width="1"/>
-  <text x="283" y="143" font-family="monospace" font-size="9" fill="#aaa">GND</text>
+  <!-- Left-side pins (x=250): GND | 3V3 | GPIO5/SDA | GPIO6/SCL -->
+  <circle cx="250" cy="148" r="5" fill="#333" stroke="#666" stroke-width="1"/>
+  <text x="263" y="151" font-family="monospace" font-size="9" fill="#aaa">GND</text>
 
-  <circle cx="270" cy="160" r="5" fill="#cc2200" stroke="#ff4422" stroke-width="1"/>
-  <text x="283" y="163" font-family="monospace" font-size="9" fill="#ff8866">3V3</text>
+  <circle cx="250" cy="168" r="5" fill="#cc2200" stroke="#ff4422" stroke-width="1"/>
+  <text x="263" y="171" font-family="monospace" font-size="9" fill="#ff8866">3V3</text>
 
-  <circle cx="270" cy="190" r="5" fill="#dd8800" stroke="#ffaa33" stroke-width="1"/>
-  <text x="283" y="193" font-family="monospace" font-size="9" fill="#ffcc77">GPIO6 SCL</text>
+  <circle cx="250" cy="198" r="5" fill="#1155cc" stroke="#4488ff" stroke-width="1"/>
+  <text x="263" y="201" font-family="monospace" font-size="9" fill="#88aaff">GPIO5 SDA</text>
 
-  <circle cx="270" cy="220" r="5" fill="#1155cc" stroke="#4488ff" stroke-width="1"/>
-  <text x="283" y="223" font-family="monospace" font-size="9" fill="#88aaff">GPIO5 SDA</text>
-
-  <!-- Right-side pins (x=430): GND | 3V3 | GPIO8/DIN -->
-  <circle cx="430" cy="140" r="5" fill="#333" stroke="#666" stroke-width="1"/>
-  <text x="417" y="143" text-anchor="end" font-family="monospace" font-size="9" fill="#aaa">GND</text>
-
-  <circle cx="430" cy="160" r="5" fill="#cc2200" stroke="#ff4422" stroke-width="1"/>
-  <text x="417" y="163" text-anchor="end" font-family="monospace" font-size="9" fill="#ff8866">3V3</text>
-
-  <circle cx="430" cy="190" r="5" fill="#9933cc" stroke="#cc66ff" stroke-width="1"/>
-  <text x="417" y="193" text-anchor="end" font-family="monospace" font-size="9" fill="#cc99ff">GPIO8</text>
+  <circle cx="250" cy="228" r="5" fill="#dd8800" stroke="#ffaa33" stroke-width="1"/>
+  <text x="263" y="231" font-family="monospace" font-size="9" fill="#ffcc77">GPIO6 SCL</text>
 
 
   <!-- ================================================================
        SSD1306 OLED (left)
-       Box: x=28..175  y=138..248
+       Box: x=28..175  y=135..255
   ================================================================ -->
-  <rect x="28" y="138" width="147" height="110" rx="5"
+  <rect x="28" y="135" width="147" height="120" rx="5"
         fill="#1b2a4a" stroke="#4a6aaa" stroke-width="2"/>
 
   <!-- Screen mock -->
-  <rect x="36" y="147" width="82" height="34" rx="2"
+  <rect x="36" y="144" width="82" height="34" rx="2"
         fill="#050510" stroke="#3355aa" stroke-width="1"/>
-  <text x="77" y="163" text-anchor="middle"
-        font-family="monospace" font-size="7" fill="#3366cc">&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;</text>
-  <text x="77" y="174" text-anchor="middle"
-        font-family="monospace" font-size="7" fill="#223388">&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;</text>
+  <rect x="40" y="150" width="74" height="6" rx="1" fill="#1a2a6a" opacity="0.8"/>
+  <rect x="40" y="160" width="50" height="6" rx="1" fill="#1a2a6a" opacity="0.6"/>
+  <rect x="40" y="170" width="62" height="4" rx="1" fill="#1a2a6a" opacity="0.4"/>
 
   <!-- Labels -->
-  <text x="36" y="199" font-family="monospace" font-size="9" font-weight="bold" fill="#89b4fa">SSD1306 OLED</text>
-  <text x="36" y="212" font-family="monospace" font-size="8" fill="#6c8fd4">128&#215;32  addr: 0x3C</text>
-  <text x="36" y="225" font-family="monospace" font-size="8" fill="#4a6899">I&#178;C  400 kHz</text>
+  <text x="36" y="197" font-family="monospace" font-size="9" font-weight="bold" fill="#89b4fa">SSD1306 OLED</text>
+  <text x="36" y="210" font-family="monospace" font-size="8" fill="#6c8fd4">128x32  addr: 0x3C</text>
+  <text x="36" y="223" font-family="monospace" font-size="8" fill="#4a6899">I2C  400 kHz</text>
+  <text x="36" y="236" font-family="monospace" font-size="8" fill="#556688">SDA=GPIO5  SCL=GPIO6</text>
 
   <!-- Right-edge pins at x=175 -->
-  <circle cx="175" cy="168" r="4" fill="#333" stroke="#666" stroke-width="1"/>
-  <text x="163" y="171" text-anchor="end" font-family="monospace" font-size="8" fill="#888">GND</text>
+  <circle cx="175" cy="163" r="4" fill="#333" stroke="#666" stroke-width="1"/>
+  <text x="163" y="166" text-anchor="end" font-family="monospace" font-size="8" fill="#888">GND</text>
 
-  <circle cx="175" cy="184" r="4" fill="#cc2200" stroke="#ff4422" stroke-width="1"/>
-  <text x="163" y="187" text-anchor="end" font-family="monospace" font-size="8" fill="#ff8866">VCC</text>
+  <circle cx="175" cy="179" r="4" fill="#cc2200" stroke="#ff4422" stroke-width="1"/>
+  <text x="163" y="182" text-anchor="end" font-family="monospace" font-size="8" fill="#ff8866">VCC</text>
 
-  <circle cx="175" cy="200" r="4" fill="#dd8800" stroke="#ffaa33" stroke-width="1"/>
-  <text x="163" y="203" text-anchor="end" font-family="monospace" font-size="8" fill="#ffcc77">SCL</text>
+  <circle cx="175" cy="195" r="4" fill="#dd8800" stroke="#ffaa33" stroke-width="1"/>
+  <text x="163" y="198" text-anchor="end" font-family="monospace" font-size="8" fill="#ffcc77">SCL</text>
 
-  <circle cx="175" cy="216" r="4" fill="#1155cc" stroke="#4488ff" stroke-width="1"/>
-  <text x="163" y="219" text-anchor="end" font-family="monospace" font-size="8" fill="#88aaff">SDA</text>
-
-
-  <!-- ================================================================
-       WS2812 RGB LED (right)
-       Box: x=525..670  y=148..258
-  ================================================================ -->
-  <rect x="525" y="148" width="145" height="110" rx="5"
-        fill="#2c1010" stroke="#883333" stroke-width="2"/>
-
-  <!-- LED mock (three-die RGB) -->
-  <circle cx="610" cy="190" r="22" fill="#1a1a1a" stroke="#555" stroke-width="1"/>
-  <circle cx="610" cy="190" r="15" fill="#111"/>
-  <circle cx="604" cy="184" r="5" fill="#660000"/>
-  <circle cx="616" cy="184" r="5" fill="#006600"/>
-  <circle cx="610" cy="196" r="5" fill="#000066"/>
-
-  <!-- Labels -->
-  <text x="535" y="228" font-family="monospace" font-size="9" font-weight="bold" fill="#ee8866">WS2812 RGB</text>
-  <text x="535" y="241" font-family="monospace" font-size="8" fill="#aa5533">DIN &#8594; GPIO8</text>
-  <text x="535" y="254" font-family="monospace" font-size="8" fill="#883322">3.3 V supply</text>
-
-  <!-- Left-edge pins at x=525 -->
-  <circle cx="525" cy="175" r="4" fill="#333" stroke="#666" stroke-width="1"/>
-  <text x="537" y="178" font-family="monospace" font-size="8" fill="#888">GND</text>
-
-  <circle cx="525" cy="191" r="4" fill="#cc2200" stroke="#ff4422" stroke-width="1"/>
-  <text x="537" y="194" font-family="monospace" font-size="8" fill="#ff8866">VCC</text>
-
-  <circle cx="525" cy="207" r="4" fill="#9933cc" stroke="#cc66ff" stroke-width="1"/>
-  <text x="537" y="210" font-family="monospace" font-size="8" fill="#cc99ff">DIN</text>
+  <circle cx="175" cy="211" r="4" fill="#1155cc" stroke="#4488ff" stroke-width="1"/>
+  <text x="163" y="214" text-anchor="end" font-family="monospace" font-size="8" fill="#88aaff">SDA</text>
 
 
   <!-- ================================================================
-       WIRES — OLED to ESP32 (left side)
-       Routed to avoid crossings:
-         GND  175,168 -> 230,168 -> 230,140 -> 270,140
-         VCC  175,184 -> 237,184 -> 237,160 -> 270,160
-         SCL  175,200 -> 255,200 -> 255,190 -> 270,190
-         SDA  175,216 -> 260,216 -> 260,220 -> 270,220
+       WIRES — OLED to ESP32 left side
+       No crossings:
+         GND  175,163 -> 218,163 -> 218,148 -> 250,148
+         VCC  175,179 -> 225,179 -> 225,168 -> 250,168
+         SCL  175,195 -> 232,195 -> 232,228 -> 250,228
+         SDA  175,211 -> 238,211 -> 238,198 -> 250,198
   ================================================================ -->
-  <polyline points="175,168 230,168 230,140 270,140"
+  <polyline points="175,163 218,163 218,148 250,148"
             fill="none" stroke="#444" stroke-width="2" stroke-linejoin="round"/>
 
-  <polyline points="175,184 237,184 237,160 270,160"
+  <polyline points="175,179 225,179 225,168 250,168"
             fill="none" stroke="#cc2200" stroke-width="2" stroke-linejoin="round"/>
 
-  <polyline points="175,200 255,200 255,190 270,190"
+  <polyline points="175,195 232,195 232,228 250,228"
             fill="none" stroke="#dd8800" stroke-width="2" stroke-linejoin="round"/>
 
-  <polyline points="175,216 260,216 260,220 270,220"
+  <polyline points="175,211 238,211 238,198 250,198"
             fill="none" stroke="#1155cc" stroke-width="2" stroke-linejoin="round"/>
-
-
-  <!-- ================================================================
-       WIRES — ESP32 to WS2812 (right side)
-       Routed to avoid crossings:
-         GND  430,140 -> 480,140 -> 480,175 -> 525,175
-         VCC  430,160 -> 470,160 -> 470,191 -> 525,191
-         DIN  430,190 -> 465,190 -> 465,207 -> 525,207
-  ================================================================ -->
-  <polyline points="430,140 480,140 480,175 525,175"
-            fill="none" stroke="#444" stroke-width="2" stroke-linejoin="round"/>
-
-  <polyline points="430,160 470,160 470,191 525,191"
-            fill="none" stroke="#cc2200" stroke-width="2" stroke-linejoin="round"/>
-
-  <polyline points="430,190 465,190 465,207 525,207"
-            fill="none" stroke="#9933cc" stroke-width="2" stroke-linejoin="round"/>
 
 
   <!-- ================================================================
        LEGEND
   ================================================================ -->
-  <text x="350" y="340" text-anchor="middle"
+  <text x="290" y="332" text-anchor="middle"
         font-family="sans-serif" font-size="9" fill="#666">
-    * Board powered via USB; on-board LDO supplies 3.3 V to OLED and WS2812
+    * WS2812 LED is soldered onto the ESP32-C3 Mini board — no external wiring needed
   </text>
 
-  <rect x="110" y="352" width="480" height="36" rx="5"
+  <rect x="90" y="344" width="400" height="28" rx="5"
         fill="#e6e6e6" stroke="#bbb" stroke-width="1"/>
 
-  <line x1="125" y1="372" x2="155" y2="372" stroke="#444" stroke-width="2"/>
-  <text x="159" y="375" font-family="monospace" font-size="9" fill="#333">GND</text>
+  <line x1="105" y1="360" x2="135" y2="360" stroke="#444" stroke-width="2"/>
+  <text x="139" y="363" font-family="monospace" font-size="9" fill="#333">GND</text>
 
-  <line x1="200" y1="372" x2="230" y2="372" stroke="#cc2200" stroke-width="2"/>
-  <text x="234" y="375" font-family="monospace" font-size="9" fill="#333">3.3 V</text>
+  <line x1="185" y1="360" x2="215" y2="360" stroke="#cc2200" stroke-width="2"/>
+  <text x="219" y="363" font-family="monospace" font-size="9" fill="#333">3.3 V</text>
 
-  <line x1="278" y1="372" x2="308" y2="372" stroke="#dd8800" stroke-width="2"/>
-  <text x="312" y="375" font-family="monospace" font-size="9" fill="#333">SCL (GPIO6)</text>
+  <line x1="263" y1="360" x2="293" y2="360" stroke="#dd8800" stroke-width="2"/>
+  <text x="297" y="363" font-family="monospace" font-size="9" fill="#333">SCL (GPIO6)</text>
 
-  <line x1="395" y1="372" x2="425" y2="372" stroke="#1155cc" stroke-width="2"/>
-  <text x="429" y="375" font-family="monospace" font-size="9" fill="#333">SDA (GPIO5)</text>
-
-  <line x1="505" y1="372" x2="535" y2="372" stroke="#9933cc" stroke-width="2"/>
-  <text x="539" y="375" font-family="monospace" font-size="9" fill="#333">DIN (GPIO8)</text>
+  <line x1="375" y1="360" x2="405" y2="360" stroke="#1155cc" stroke-width="2"/>
+  <text x="409" y="363" font-family="monospace" font-size="9" fill="#333">SDA (GPIO5)</text>
 
 </svg>

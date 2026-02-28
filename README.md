@@ -9,22 +9,23 @@ An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, RGB
 
 | Component | Detail |
 |-----------|--------|
-| SoC | ESP32-C3 (RISC-V, BLE 5.0, no Classic BT) |
+| SoC | ESP32-C3 Mini (RISC-V, BLE 5.0, no Classic BT) |
 | Flash | 2 MB |
-| LED | WS2812 RGB on GPIO 8 |
+| LED | WS2812 RGB — **built into the board** on GPIO 8 (no external wiring) |
 | OLED | SSD1306 128×32, I2C — SDA GPIO 5, SCL GPIO 6 |
 
 ### Wiring
 
 ![Wiring Diagram](docs/wiring.svg)
 
-| Signal | ESP32-C3 pin | OLED (SSD1306) | LED (WS2812) |
-|--------|:------------:|:--------------:|:------------:|
-| GND | GND | GND | GND |
-| 3.3 V | 3V3 | VCC | VCC |
-| I²C SDA | GPIO 5 | SDA | — |
-| I²C SCL | GPIO 6 | SCL | — |
-| LED data | GPIO 8 | — | DIN |
+The only external connection is the OLED display. The WS2812 RGB LED is built into the ESP32-C3 Mini board.
+
+| Signal | ESP32-C3 pin | OLED (SSD1306) |
+|--------|:------------:|:--------------:|
+| GND | GND | GND |
+| 3.3 V | 3V3 | VCC |
+| I²C SDA | GPIO 5 | SDA |
+| I²C SCL | GPIO 6 | SCL |
 
 ## Features
 
