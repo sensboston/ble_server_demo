@@ -67,6 +67,7 @@ env/
 compile_commands.json
 
 CLAUDE.md
+.claude/
 
 # Windows specific
 Thumbs.db

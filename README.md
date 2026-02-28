@@ -7,14 +7,24 @@ An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, RGB
 
 ## Hardware
 
-![Wiring Diagram](docs/wiring.svg)
-
 | Component | Detail |
 |-----------|--------|
 | SoC | ESP32-C3 (RISC-V, BLE 5.0, no Classic BT) |
 | Flash | 2 MB |
 | LED | WS2812 RGB on GPIO 8 |
 | OLED | SSD1306 128×32, I2C — SDA GPIO 5, SCL GPIO 6 |
+
+### Wiring
+
+![Wiring Diagram](docs/wiring.svg)
+
+| Signal | ESP32-C3 pin | OLED (SSD1306) | LED (WS2812) |
+|--------|:------------:|:--------------:|:------------:|
+| GND | GND | GND | GND |
+| 3.3 V | 3V3 | VCC | VCC |
+| I²C SDA | GPIO 5 | SDA | — |
+| I²C SCL | GPIO 6 | SCL | — |
+| LED data | GPIO 8 | — | DIN |
 
 ## Features
 
@@ -97,17 +107,15 @@ sdkconfig.defaults — enables custom partition table
 
 Requires [ESP-IDF v5.x](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/).
 
-On Windows with the ESP-IDF VS Code extension, use the provided PowerShell script to avoid MSYS environment conflicts:
-
-```powershell
+```bash
 # Build
-powershell -ExecutionPolicy Bypass -File .claude/build.ps1 build
+idf.py build
 
 # Flash (adjust port as needed)
-powershell -ExecutionPolicy Bypass -File .claude/build.ps1 flash -p COM9
+idf.py -p /dev/ttyUSB0 flash
 ```
 
-Or use the ESP-IDF VS Code extension directly (Build / Flash buttons in the status bar).
+The easiest option on Windows is the **ESP-IDF VS Code extension** — use the Build / Flash buttons in the status bar. If you run `idf.py` from a MSYS/Git Bash shell on Windows, make sure `MSYSTEM` is unset first to avoid ESP-IDF environment conflicts.
 
 ## Configuration
 
