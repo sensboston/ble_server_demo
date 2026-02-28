@@ -1,0 +1,3 @@
+# Custom partition table - maximum app size for 2MB flash
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
