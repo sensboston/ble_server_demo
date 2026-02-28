@@ -2,6 +2,9 @@
 
 An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, RGB LED control with animations, WiFi captive portal provisioning, NTP time sync, an OLED status display, and a browser-based monitoring/control interface — all running concurrently on a single chip.
 
+![20260228_001952](https://github.com/user-attachments/assets/47cd281c-7d89-4c82-b842-16e74fb0eb46)
+
+
 ## Hardware
 
 | Component | Detail |
