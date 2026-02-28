@@ -438,12 +438,18 @@ static esp_err_t root_handler(httpd_req_t *req)
         "function setLedAnim(a){"
         "var ids={'off':'btnOff','fade':'btnFade','fire':'btnFire','rainbow':'btnRainbow'};"
         "fetch('/led/anim',{method:'POST',body:a}).then(function(){setLedActive(ids[a]);});}"
+        "function setSliders(h){"
+        "document.getElementById('slR').value=parseInt(h.substring(0,2),16);"
+        "document.getElementById('slG').value=parseInt(h.substring(2,4),16);"
+        "document.getElementById('slB').value=parseInt(h.substring(4,6),16);"
+        "upClr();}"
         "function fState(){"
         "fetch('/state').then(r=>r.json()).then(s=>{"
         "on=s.ble;ln=s.log;"
         "document.documentElement.className=s.theme==='light'?'light':'';"
         "localStorage.setItem('t',s.theme);"
-        "upBtns();});}"
+        "upBtns();"
+        "if(s.led&&s.led.length===6)setSliders(s.led);});}"
         "function upd(){"
         "fetch('/log').then(r=>r.json()).then(d=>{"
         "var h='';"
@@ -454,7 +460,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "+'<td>'+e.dev+'</td><td>'+e.ch+'</td><td>'+e.d+'</td></tr>';}"
         "document.getElementById('tb').innerHTML=h;"
         "});}"
-        "fState();loadVal();upd();upClr();"
+        "fState();loadVal();upd();"
         "setInterval(function(){loadVal();upd();},2000);"
         "</script></body></html>";
 
@@ -595,14 +601,16 @@ static esp_err_t log_handler(httpd_req_t *req)
     return ret;
 }
 
-// Return current state as JSON {ble, log, theme}
+// Return current state as JSON {ble, log, theme, led}
 static esp_err_t state_handler(httpd_req_t *req)
 {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "{\"ble\":%s,\"log\":%s,\"theme\":\"%s\"}",
+    char led_cmd[9] = {0};
+    led_ctrl_get_command(led_cmd, sizeof(led_cmd));
+    char buf[96];
+    snprintf(buf, sizeof(buf), "{\"ble\":%s,\"log\":%s,\"theme\":\"%s\",\"led\":\"%s\"}",
              s_ble_enabled ? "true" : "false",
              s_log_enabled ? "true" : "false",
-             s_theme);
+             s_theme, led_cmd);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
 }
