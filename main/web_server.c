@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
@@ -8,6 +9,9 @@
 #include "freertos/task.h"
 
 #define TAG "WEB_SERVER"
+
+// Timestamps below this value (Jan 1 2020) are boot-relative, not wall-clock
+#define NTP_SYNCED_THRESHOLD    1577836800UL
 
 // --- Storage ---
 
@@ -93,11 +97,14 @@ static void log_add(uint8_t device_idx, ble_event_type_t event,
         log_count++;
     }
 
-    log_entries[idx].timestamp_ms = pdTICKS_TO_MS(xTaskGetTickCount());
-    log_entries[idx].device_idx   = device_idx;
-    log_entries[idx].event_type   = (uint8_t)event;
-    log_entries[idx].char_idx     = char_idx;
-    log_entries[idx].data_offset  = data_offset;
+    time_t now;
+    time(&now);
+
+    log_entries[idx].timestamp   = (uint32_t)now;
+    log_entries[idx].device_idx  = device_idx;
+    log_entries[idx].event_type  = (uint8_t)event;
+    log_entries[idx].char_idx    = char_idx;
+    log_entries[idx].data_offset = data_offset;
 }
 
 // --- Public API ---
@@ -166,6 +173,27 @@ static const char *event_name(uint8_t evt)
     }
 }
 
+// Format timestamp into date_buf ("MM/DD/YY" or "boot") and time_buf ("HH:MM:SS")
+static void format_timestamp(uint32_t ts, char *date_buf, size_t date_sz,
+                             char *time_buf, size_t time_sz)
+{
+    if (ts >= NTP_SYNCED_THRESHOLD) {
+        // Real wall-clock time - convert to local time using configured timezone
+        time_t t = (time_t)ts;
+        struct tm tinfo;
+        localtime_r(&t, &tinfo);
+        strftime(date_buf, date_sz, "%m/%d/%y", &tinfo);
+        strftime(time_buf, time_sz, "%H:%M:%S", &tinfo);
+    } else {
+        // Boot-relative time
+        snprintf(date_buf, date_sz, "boot");
+        snprintf(time_buf, time_sz, "%02lu:%02lu:%02lu",
+                 (unsigned long)(ts / 3600),
+                 (unsigned long)((ts % 3600) / 60),
+                 (unsigned long)(ts % 60));
+    }
+}
+
 // Serve main HTML page
 static esp_err_t root_handler(httpd_req_t *req)
 {
@@ -179,16 +207,18 @@ static esp_err_t root_handler(httpd_req_t *req)
         "h1{color:#569cd6;border-bottom:1px solid #444;padding-bottom:8px}"
         "table{width:100%;border-collapse:collapse;margin-top:16px}"
         "th{background:#2d2d2d;color:#9cdcfe;padding:8px;text-align:left;border:1px solid #444}"
-        "td{padding:6px 8px;border:1px solid #333;font-size:13px}"
+        "td{padding:6px 8px;border:1px solid #333;font-size:13px;vertical-align:top}"
         "tr:nth-child(even){background:#252525}"
         ".CONNECT{color:#4ec9b0}.DISCONNECT{color:#ce9178}"
         ".READ{color:#569cd6}.WRITE{color:#dcdcaa}"
+        ".date{font-size:11px;color:#888}"
+        ".time{font-size:13px}"
         ".status{font-size:12px;color:#888;margin-top:8px}"
         "</style></head><body>"
         "<h1>&#x1F4F6; ESP32 BLE Server Monitor</h1>"
         "<div class='status' id='status'>Connecting...</div>"
         "<table><thead>"
-        "<tr><th>Time (s)</th><th>Event</th><th>Device</th><th>Characteristic</th><th>Data</th></tr>"
+        "<tr><th>Time</th><th>Event</th><th>Device</th><th>Characteristic</th><th>Data</th></tr>"
         "</thead><tbody id='log'></tbody></table>"
         "<script>"
         "function update(){"
@@ -196,7 +226,9 @@ static esp_err_t root_handler(httpd_req_t *req)
         "var rows='';"
         "for(var i=data.length-1;i>=0;i--){"
         "var e=data[i];"
-        "rows+='<tr><td>'+e.t+'</td><td class=\"'+e.ev+'\">'+e.ev+'</td>"
+        "rows+='<tr>"
+        "<td><span class=\"date\">'+e.date+'</span><br><span class=\"time\">'+e.time+'</span></td>"
+        "<td class=\"'+e.ev+'\">'+e.ev+'</td>"
         "<td>'+e.dev+'</td><td>'+e.ch+'</td><td>'+e.d+'</td></tr>';}"
         "document.getElementById('log').innerHTML=rows;"
         "document.getElementById('status').innerText="
@@ -246,6 +278,12 @@ static esp_err_t log_handler(httpd_req_t *req)
         uint16_t idx = (log_head + i) % LOG_MAX_ENTRIES;
         log_entry_t *e = &log_entries[idx];
 
+        // Format date and time strings
+        char date_str[12];
+        char time_str[12];
+        format_timestamp(e->timestamp, date_str, sizeof(date_str),
+                         time_str, sizeof(time_str));
+
         // Format device address
         char dev_str[20] = "unknown";
         if (e->device_idx < device_count) {
@@ -264,15 +302,11 @@ static esp_err_t log_handler(httpd_req_t *req)
         if (e->data_offset != 0xFFFF && e->data_offset < LOG_DATA_POOL_SIZE)
             data_str = data_pool + e->data_offset;
 
-        // Format timestamp
-        uint32_t sec = e->timestamp_ms / 1000;
-        uint32_t ms  = e->timestamp_ms % 1000;
-
         int written = snprintf(buf + pos, buf_size - (size_t)pos - 2,
-                               "%s{\"t\":\"%lu.%03lu\",\"ev\":\"%s\","
+                               "%s{\"date\":\"%s\",\"time\":\"%s\",\"ev\":\"%s\","
                                "\"dev\":\"%s\",\"ch\":\"%s\",\"d\":\"%s\"}",
                                i > 0 ? "," : "",
-                               sec, ms,
+                               date_str, time_str,
                                event_name(e->event_type),
                                dev_str, char_str, data_str);
         if (written > 0) pos += written;

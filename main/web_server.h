@@ -1,17 +1,9 @@
 #pragma once
 
 #include <stdint.h>
+#include "config.h"
 
-// Maximum number of unique BLE devices to track
-#define LOG_MAX_DEVICES     8
-// Maximum number of known GATT characteristics
-#define LOG_MAX_CHARS       16
-// Maximum number of log entries in ring buffer
-#define LOG_MAX_ENTRIES     4096
-// Size of data string pool for READ/WRITE values (bytes)
-#define LOG_DATA_POOL_SIZE  4096
-
-// BLE event types (2 bits used)
+// BLE event types
 typedef enum {
     BLE_EVT_CONNECT    = 0,
     BLE_EVT_DISCONNECT = 1,
@@ -19,16 +11,18 @@ typedef enum {
     BLE_EVT_WRITE      = 3,
 } ble_event_type_t;
 
-// Compact log entry - 7 bytes per record
+// Compact log entry - 9 bytes per record
+// timestamp holds Unix time (seconds) when NTP is synced,
+// or seconds since boot otherwise (distinguishable: boot values < Jan 1 2020)
 typedef struct __attribute__((packed)) {
-    uint32_t timestamp_ms;  // Milliseconds since boot
+    uint32_t timestamp;     // Unix time if synced, seconds since boot otherwise
     uint8_t  device_idx;    // Index into device address table (0xFF = unknown)
     uint8_t  event_type;    // ble_event_type_t
     uint8_t  char_idx;      // Index into characteristic UUID table (0xFF = unknown)
     uint16_t data_offset;   // Offset into data pool (0xFFFF = no data)
 } log_entry_t;
 
-// Initialize logging subsystem (mutex) - call once in app_main before any tasks
+// Initialize logging mutex - call once in app_main before any tasks start
 void web_log_init(void);
 
 // Initialize and start HTTP web server

@@ -4,26 +4,22 @@
 #include "led_strip.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "config.h"
 #include "ble_server.h"
 #include "wifi_manager.h"
 #include "web_server.h"
+#include "ntp_sync.h"
 
 #define TAG "MAIN"
 
-// WS2812 RGB LED GPIO
-#define LED_GPIO    8
-
-// Task stack sizes
-#define BLE_TASK_STACK  4096
-#define WIFI_TASK_STACK 6144
-
 static led_strip_handle_t led_strip;
 
-// WiFi manager task - runs provisioning or connects, then starts web server
+// WiFi manager task - connects to WiFi, syncs time, then starts web server
 static void wifi_task(void *arg)
 {
     wifi_manager_start();   // Blocks until WiFi connected
-    web_server_start();     // Start HTTP server after WiFi is ready
+    ntp_sync_start();       // Start NTP sync (runs in background)
+    web_server_start();     // Start HTTP server
     vTaskDelete(NULL);
 }
 
@@ -45,7 +41,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "NVS initialized");
 
-    // Initialize WS2812 RGB LED on GPIO8
+    // Initialize WS2812 RGB LED
     led_strip_config_t strip_config = {
         .strip_gpio_num = LED_GPIO,
         .max_leds = 1,

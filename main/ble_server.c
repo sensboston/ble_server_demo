@@ -1,6 +1,7 @@
 #include <string.h>
 #include "ble_server.h"
 #include "web_server.h"
+#include "config.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_bt.h"
@@ -13,13 +14,6 @@
 
 #define TAG "BLE_SERVER"
 
-// BLE device name visible to other devices
-#define DEVICE_NAME         "ESP32_BLE_SERVER"
-
-// Service UUID (custom 16-bit)
-#define SERVICE_UUID        0x00FF
-// Characteristic UUID (custom 16-bit)
-#define CHAR_UUID           0xFF01
 // GATTS application profile ID
 #define PROFILE_APP_ID      0
 
@@ -27,21 +21,9 @@
 #define NVS_NAMESPACE       "ble_storage"
 #define NVS_KEY             "ble_value"
 
-// Maximum length of stored string
-#define MAX_VALUE_LEN       20
-
-// Default value if NVS is empty
-#define DEFAULT_VALUE       "hello"
-
 // In-RAM cache for the characteristic value to avoid NVS reads on every BLE READ
-static char   cached_value[MAX_VALUE_LEN + 1];
+static char   cached_value[BLE_MAX_VALUE_LEN + 1];
 static size_t cached_len;
-
-// Duration of read/write flash before returning to connected color (ms)
-#define LED_FLASH_DURATION_MS 300
-
-// LED brightness level (0-255)
-#define LED_BRIGHTNESS      32
 
 static uint16_t service_handle;
 static uint16_t char_handle;
@@ -174,7 +156,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
     switch (event) {
     case ESP_GATTS_REG_EVT: {
         ESP_LOGI(TAG, "GATTS registered, app_id: %d", param->reg.app_id);
-        esp_ble_gap_set_device_name(DEVICE_NAME);
+        esp_ble_gap_set_device_name(BLE_DEVICE_NAME);
 
         // Create service with 4 handles (service + characteristic + descriptor)
         esp_gatt_srvc_id_t service_id = {
@@ -183,7 +165,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 .inst_id = 0,
                 .uuid = {
                     .len = ESP_UUID_LEN_16,
-                    .uuid = { .uuid16 = SERVICE_UUID }
+                    .uuid = { .uuid16 = BLE_SERVICE_UUID }
                 }
             }
         };
@@ -199,21 +181,21 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         // Add characteristic with read/write permissions
         esp_bt_uuid_t char_uuid = {
             .len = ESP_UUID_LEN_16,
-            .uuid = { .uuid16 = CHAR_UUID }
+            .uuid = { .uuid16 = BLE_CHAR_UUID }
         };
 
         // Load value from NVS into cache, use default if not found
         cached_len = sizeof(cached_value);
         if (nvs_read_value(cached_value, &cached_len) != ESP_OK) {
-            ESP_LOGI(TAG, "No NVS value found, using default: %s", DEFAULT_VALUE);
-            strncpy(cached_value, DEFAULT_VALUE, sizeof(cached_value));
-            cached_len = strlen(DEFAULT_VALUE);
+            ESP_LOGI(TAG, "No NVS value found, using default: %s", BLE_DEFAULT_VALUE);
+            strncpy(cached_value, BLE_DEFAULT_VALUE, sizeof(cached_value));
+            cached_len = strlen(BLE_DEFAULT_VALUE);
         } else {
             ESP_LOGI(TAG, "Loaded value from NVS: %s", cached_value);
         }
 
         esp_attr_value_t char_val = {
-            .attr_max_len = MAX_VALUE_LEN,
+            .attr_max_len = BLE_MAX_VALUE_LEN,
             .attr_len     = cached_len,
             .attr_value   = (uint8_t *)cached_value
         };
@@ -274,7 +256,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         // Flash blue for read operation
         led_flash_operation(true);
 
-        web_log_read(connected_bd_addr, CHAR_UUID, cached_value);
+        web_log_read(connected_bd_addr, BLE_CHAR_UUID, cached_value);
 
         // Send cached value to client (no NVS access needed)
         esp_gatt_rsp_t rsp = {0};
@@ -294,7 +276,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         led_flash_operation(false);
 
         // Update cache and persist to NVS
-        cached_len = param->write.len < MAX_VALUE_LEN ? param->write.len : MAX_VALUE_LEN;
+        cached_len = param->write.len < BLE_MAX_VALUE_LEN ? param->write.len : BLE_MAX_VALUE_LEN;
         memcpy(cached_value, param->write.value, cached_len);
         cached_value[cached_len] = '\0';
 
@@ -304,7 +286,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         else
             ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(ret));
 
-        web_log_write(connected_bd_addr, CHAR_UUID, cached_value);
+        web_log_write(connected_bd_addr, BLE_CHAR_UUID, cached_value);
 
         // Send write response if requested
         if (param->write.need_rsp) {
