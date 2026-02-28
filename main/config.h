@@ -37,5 +37,5 @@
 // --- Web log ring buffer ---
 #define LOG_MAX_DEVICES         8
 #define LOG_MAX_CHARS           16
-#define LOG_MAX_ENTRIES         4096
+#define LOG_MAX_ENTRIES         256     // 4096 entries * 200 B/entry = ~800 KB malloc, exceeds heap
 #define LOG_DATA_POOL_SIZE      4096

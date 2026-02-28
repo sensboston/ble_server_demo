@@ -26,6 +26,7 @@
 static EventGroupHandle_t s_wifi_events;
 static bool               s_provisioning = false;
 static httpd_handle_t     s_prov_server  = NULL;
+static uint8_t            s_retry        = 0;   // reconnect backoff counter
 
 // --- WiFi event handler ---
 
@@ -39,12 +40,21 @@ static void event_handler(void *arg, esp_event_base_t base,
             if (!s_provisioning)
                 esp_wifi_connect();
             break;
-        case WIFI_EVENT_STA_DISCONNECTED:
-            if (s_provisioning)
+        case WIFI_EVENT_STA_DISCONNECTED: {
+            if (s_provisioning) {
                 xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
-            else
-                esp_wifi_connect(); // Auto-reconnect in normal operation
+            } else {
+                // Exponential backoff: 1s, 2s, 4s, 8s, cap at 16s
+                uint32_t delay_ms = (1000u << (s_retry < 4 ? s_retry : 4));
+                ESP_LOGW(TAG, "Disconnected, retrying in %lu ms (attempt %d)",
+                         delay_ms, s_retry + 1);
+                vTaskDelay(pdMS_TO_TICKS(delay_ms));
+                s_retry++;
+                esp_wifi_connect();
+                // Reset counter on successful IP acquisition (see IP_EVENT handler)
+            }
             break;
+        }
         case WIFI_EVENT_AP_STACONNECTED:
             ESP_LOGI(TAG, "Client connected to provisioning AP");
             break;
@@ -57,6 +67,7 @@ static void event_handler(void *arg, esp_event_base_t base,
         char ip_line[22];
         snprintf(ip_line, sizeof(ip_line), "IP:" IPSTR, IP2STR(&event->ip_info.ip));
         oled_set_line(2, ip_line);
+        s_retry = 0;  // reset backoff counter on successful connection
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }

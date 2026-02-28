@@ -280,17 +280,19 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         memcpy(cached_value, param->write.value, cached_len);
         cached_value[cached_len] = '\0';
 
+        // Send response immediately — NVS write below can take 20-50 ms and
+        // must not block the BLE callback task before the client gets an ACK.
+        if (param->write.need_rsp)
+            esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
+                                        param->write.trans_id, ESP_GATT_OK, NULL);
+
+        web_log_write(connected_bd_addr, BLE_CHAR_UUID, cached_value);
+
         esp_err_t ret = nvs_write_value(cached_value);
         if (ret == ESP_OK)
             ESP_LOGI(TAG, "Value saved to NVS: %s", cached_value);
         else
             ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(ret));
-
-        web_log_write(connected_bd_addr, BLE_CHAR_UUID, cached_value);
-
-        if (param->write.need_rsp)
-            esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
-                                        param->write.trans_id, ESP_GATT_OK, NULL);
         break;
     }
 
