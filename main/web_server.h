@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "config.h"
 
 // BLE event types
@@ -22,8 +23,20 @@ typedef struct __attribute__((packed)) {
     uint16_t data_offset;   // Offset into data pool (0xFFFF = no data)
 } log_entry_t;
 
-// Initialize logging mutex - call once in app_main before any tasks start
+// Callback type for BLE on/off control triggered from web UI
+typedef void (*web_ble_ctrl_cb_t)(bool enabled);
+
+// Callback type for WiFi reset triggered from web UI
+typedef void (*web_wifi_reset_cb_t)(void);
+
+// Initialize logging mutex and load persisted config - call once in app_main before any tasks start
 void web_log_init(void);
+
+// Register callback invoked when the web UI toggles BLE on/off
+void web_set_ble_ctrl_cb(web_ble_ctrl_cb_t cb);
+
+// Register callback invoked when the web UI requests WiFi reset
+void web_set_wifi_reset_cb(web_wifi_reset_cb_t cb);
 
 // Initialize and start HTTP web server
 void web_server_start(void);

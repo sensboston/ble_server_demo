@@ -27,6 +27,9 @@ static size_t cached_len;
 
 static uint16_t service_handle;
 static uint16_t char_handle;
+static uint16_t reset_char_handle;
+
+static ble_wifi_reset_cb_t s_wifi_reset_cb = NULL;
 
 // Current connected client address (for logging)
 static uint8_t connected_bd_addr[6];
@@ -37,8 +40,11 @@ static led_strip_handle_t led_strip;
 // FreeRTOS timer for returning LED to connected state after flash
 static TimerHandle_t led_timer;
 
-// Track connection state for timer callback
-static bool is_connected = false;
+// Track connection state for timer callback and enable/disable control
+static bool              is_connected     = false;
+static bool              s_ble_enabled    = true;
+static uint16_t          current_conn_id  = 0xFFFF;
+static esp_gatt_if_t     current_gatts_if = 0xFF;
 
 // --- LED helper functions ---
 
@@ -169,7 +175,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 }
             }
         };
-        esp_ble_gatts_create_service(gatts_if, &service_id, 4);
+        esp_ble_gatts_create_service(gatts_if, &service_id, 8);
         break;
     }
     case ESP_GATTS_CREATE_EVT: {
@@ -205,10 +211,26 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                                &char_val, NULL);
         break;
     }
-    case ESP_GATTS_ADD_CHAR_EVT:
-        ESP_LOGI(TAG, "Characteristic added, handle: %d", param->add_char.attr_handle);
-        char_handle = param->add_char.attr_handle;
+    case ESP_GATTS_ADD_CHAR_EVT: {
+        uint16_t uuid16 = param->add_char.char_uuid.uuid.uuid16;
+        ESP_LOGI(TAG, "Characteristic added, uuid: 0x%04X, handle: %d",
+                 uuid16, param->add_char.attr_handle);
+        if (uuid16 == BLE_CHAR_UUID) {
+            char_handle = param->add_char.attr_handle;
+            // Chain: add the WiFi-reset write-only characteristic
+            esp_bt_uuid_t reset_uuid = {
+                .len = ESP_UUID_LEN_16,
+                .uuid = { .uuid16 = BLE_RESET_CHAR_UUID }
+            };
+            esp_ble_gatts_add_char(service_handle, &reset_uuid,
+                                   ESP_GATT_PERM_WRITE,
+                                   ESP_GATT_CHAR_PROP_BIT_WRITE,
+                                   NULL, NULL);
+        } else if (uuid16 == BLE_RESET_CHAR_UUID) {
+            reset_char_handle = param->add_char.attr_handle;
+        }
         break;
+    }
 
     case ESP_GATTS_START_EVT: {
         ESP_LOGI(TAG, "Service started");
@@ -235,18 +257,22 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
     }
     case ESP_GATTS_CONNECT_EVT:
         ESP_LOGI(TAG, "Client connected, conn_id: %d", param->connect.conn_id);
-        is_connected = true;
+        is_connected    = true;
+        current_conn_id = param->connect.conn_id;
+        current_gatts_if = gatts_if;
         memcpy(connected_bd_addr, param->connect.remote_bda, 6);
         led_connected();
         web_log_connect(connected_bd_addr);
         break;
 
     case ESP_GATTS_DISCONNECT_EVT:
-        ESP_LOGI(TAG, "Client disconnected, restarting advertising");
-        is_connected = false;
+        ESP_LOGI(TAG, "Client disconnected");
+        is_connected    = false;
+        current_conn_id = 0xFFFF;
         web_log_disconnect(connected_bd_addr);
         led_off();
-        esp_ble_gap_start_advertising(&adv_params);
+        if (s_ble_enabled)
+            esp_ble_gap_start_advertising(&adv_params);
         break;
 
     case ESP_GATTS_READ_EVT: {
@@ -269,13 +295,24 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         break;
     }
     case ESP_GATTS_WRITE_EVT: {
-        ESP_LOGI(TAG, "Write request, conn_id: %d, len: %d",
-                 param->write.conn_id, param->write.len);
+        ESP_LOGI(TAG, "Write request, conn_id: %d, handle: %d, len: %d",
+                 param->write.conn_id, param->write.handle, param->write.len);
 
-        // Flash red for write operation
+        if (param->write.handle == reset_char_handle) {
+            // WiFi reset characteristic: value "1" triggers reset
+            if (param->write.len >= 1 && param->write.value[0] == '1') {
+                ESP_LOGI(TAG, "WiFi reset requested via BLE");
+                if (param->write.need_rsp)
+                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
+                                                param->write.trans_id, ESP_GATT_OK, NULL);
+                if (s_wifi_reset_cb) s_wifi_reset_cb();
+            }
+            break;
+        }
+
+        // Default characteristic: flash red, update cache, persist to NVS
         led_flash_operation(false);
 
-        // Update cache and persist to NVS
         cached_len = param->write.len < BLE_MAX_VALUE_LEN ? param->write.len : BLE_MAX_VALUE_LEN;
         memcpy(cached_value, param->write.value, cached_len);
         cached_value[cached_len] = '\0';
@@ -288,16 +325,37 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 
         web_log_write(connected_bd_addr, BLE_CHAR_UUID, cached_value);
 
-        // Send write response if requested
-        if (param->write.need_rsp) {
+        if (param->write.need_rsp)
             esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
                                         param->write.trans_id, ESP_GATT_OK, NULL);
-        }
         break;
     }
     default:
         break;
     }
+}
+
+void ble_set_enabled(bool enabled)
+{
+    s_ble_enabled = enabled;
+    if (!enabled) {
+        esp_ble_gap_stop_advertising();
+        if (current_conn_id != 0xFFFF)
+            esp_ble_gatts_close(current_gatts_if, current_conn_id);
+    } else {
+        if (!is_connected)
+            esp_ble_gap_start_advertising(&adv_params);
+    }
+}
+
+bool ble_is_enabled(void)
+{
+    return s_ble_enabled;
+}
+
+void ble_set_wifi_reset_cb(ble_wifi_reset_cb_t cb)
+{
+    s_wifi_reset_cb = cb;
 }
 
 // Initialize and start BLE GATT server

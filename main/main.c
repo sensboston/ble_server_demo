@@ -10,6 +10,7 @@
 #include "web_server.h"
 #include "ntp_sync.h"
 
+
 #define TAG "MAIN"
 
 static led_strip_handle_t led_strip;
@@ -54,8 +55,11 @@ void app_main(void)
     led_strip_refresh(led_strip);
     ESP_LOGI(TAG, "LED initialized");
 
-    // Initialize BLE event logging mutex before any tasks start
+    // Initialize BLE event logging mutex, load persisted config
     web_log_init();
+    web_set_ble_ctrl_cb(ble_set_enabled);
+    web_set_wifi_reset_cb(wifi_manager_reset);
+    ble_set_wifi_reset_cb(wifi_manager_reset);
 
     // Start BLE and WiFi as independent FreeRTOS tasks
     xTaskCreate(ble_task,  "ble_task",  BLE_TASK_STACK,  NULL, 5, NULL);

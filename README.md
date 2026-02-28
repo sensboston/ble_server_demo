@@ -1,0 +1,90 @@
+# BLE Server Demo
+
+An ESP32-C3 firmware project built with ESP-IDF. Combines a BLE GATT server, WiFi captive portal provisioning, NTP time sync, and a browser-based monitoring interface — all running concurrently on a single chip.
+
+## Hardware
+
+| Component | Detail |
+|-----------|--------|
+| SoC | ESP32-C3 (RISC-V, BLE 5.0, no Classic BT) |
+| Flash | 2 MB |
+| LED | WS2812 RGB on GPIO 8 |
+
+## Features
+
+### BLE GATT Server
+- Single read/write characteristic (UUID configurable in `config.h`)
+- Value persisted to NVS; cached in RAM to avoid NVS reads on every BLE READ
+- LED feedback: green = connected, blue flash = read, red flash = write
+- Second write-only characteristic triggers WiFi credential reset
+- Enable/disable advertising at runtime from the web UI
+
+### WiFi Provisioning (Captive Portal)
+When no WiFi credentials are stored, the device opens a SoftAP (`ESP32_XXXXXX`) and presents a captive portal:
+
+- **DNS hijacking** — all domains resolve to `192.168.4.1` (TTL=0, no caching)
+- **TCP 443 fast-reject** — RSTs HTTPS probes immediately, reducing Android detection delay from 10+ s to ~1–2 s
+- **OS-specific probe handlers** — iOS (`/hotspot-detect.html`), Android (`/generate_204`), Windows NCSI (`/connecttest.txt`)
+- WiFi scan with SSID dropdown; remembers last connected network across resets
+- Password field with SVG show/hide toggle
+
+### Web Monitor (`http://<device-ip>/`)
+- Dark/light theme, mobile-friendly
+- Live BLE event log with timestamps (real time after NTP sync, boot-relative before)
+- Toggle BLE advertising on/off
+- Trigger WiFi credential reset
+
+### NTP Time Sync
+- Syncs on WiFi connect; timezone EST5EDT (configurable in `config.h`)
+- Log timestamps switch from boot-relative to real time automatically
+
+## Project Structure
+
+```
+main/
+  config.h        — all tunable constants (UUIDs, GPIO, task stacks, log size)
+  main.c          — app_main: NVS init, LED init, launch BLE + WiFi tasks
+  ble_server.c    — GATT server, LED control, NVS persistence
+  wifi_manager.c  — captive portal provisioning + normal STA connection
+  ntp_sync.c      — SNTP client
+  web_server.c    — HTTP monitor, ring-buffer event log
+partitions.csv    — custom partition table (factory 1.875 MB, ~500 KB headroom)
+sdkconfig.defaults — enables custom partition table
+```
+
+## Build & Flash
+
+Requires [ESP-IDF v5.x](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/).
+
+On Windows with the ESP-IDF VS Code extension, use the provided PowerShell script to avoid MSYS environment conflicts:
+
+```powershell
+# Build
+powershell -ExecutionPolicy Bypass -File .claude/build.ps1 build
+
+# Flash (adjust port as needed)
+powershell -ExecutionPolicy Bypass -File .claude/build.ps1 flash -p COM9
+```
+
+Or use the ESP-IDF VS Code extension directly (Build / Flash buttons in the status bar).
+
+## Configuration
+
+Edit `main/config.h` before building:
+
+```c
+#define BLE_DEVICE_NAME     "ESP32-BLE"     // Advertised BLE name
+#define BLE_SERVICE_UUID    0xFF00           // GATT service UUID
+#define BLE_CHAR_UUID       0xFF01           // Main characteristic UUID
+#define BLE_RESET_CHAR_UUID 0xFF02           // WiFi-reset characteristic UUID
+#define LED_GPIO            8                // WS2812 data pin
+#define LED_BRIGHTNESS      30               // 0–255
+```
+
+## Usage
+
+1. **First boot** — connect to the `ESP32_XXXXXX` WiFi AP, then open `http://192.168.4.1/` (or tap "Configure router" / "Sign in to WiFi" on mobile).
+2. Select your network, enter the password, tap **Connect**. The device reboots and connects automatically.
+3. Open the web monitor at the device's IP address to view BLE activity.
+4. Use any BLE client (nRF Connect, LightBlue, etc.) to read/write the GATT characteristic.
+5. To change WiFi networks: tap **Reset WiFi** in the web UI or write `1` to the reset characteristic via BLE.

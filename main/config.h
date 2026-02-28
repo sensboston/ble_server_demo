@@ -10,7 +10,8 @@
 // --- BLE Server ---
 #define BLE_DEVICE_NAME         "ESP32_BLE_SERVER"
 #define BLE_SERVICE_UUID        0x00FF
-#define BLE_CHAR_UUID           0xFF01
+#define BLE_CHAR_UUID           0xFF01  // R/W characteristic: persistent string value
+#define BLE_RESET_CHAR_UUID     0xFF02  // W-only characteristic: write "1" to reset WiFi
 #define BLE_MAX_VALUE_LEN       20
 #define BLE_DEFAULT_VALUE       "hello"
 
