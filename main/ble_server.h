@@ -17,3 +17,9 @@ typedef void (*ble_wifi_reset_cb_t)(void);
 
 // Register callback invoked when the reset characteristic receives "1"
 void ble_set_wifi_reset_cb(ble_wifi_reset_cb_t cb);
+
+// Read the current cached characteristic value into buf (null-terminated)
+void ble_get_value(char *buf, size_t len);
+
+// Update the cached characteristic value and persist it to NVS
+esp_err_t ble_set_value(const char *val);

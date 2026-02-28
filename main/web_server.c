@@ -1,4 +1,6 @@
 #include "web_server.h"
+#include "ble_server.h"
+#include "config.h"
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -254,7 +256,7 @@ static void format_timestamp(uint32_t ts, char *date_buf, size_t date_sz,
     }
 }
 
-// Serve main HTML page
+// Serve main HTML page with tabbed interface
 static esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
@@ -267,7 +269,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<meta name='theme-color' content='#1e1e1e'>"
         "<link rel='manifest' href='/manifest.json'>"
         "<link rel='icon' type='image/svg+xml' href='/favicon.svg'>"
-        "<title>BLE Monitor</title>"
+        "<title>ESP32 BLE Server</title>"
         "<style>"
         ":root{--bg:#1e1e1e;--bg2:#2d2d2d;--bg3:#252525;--bd:#444;--bd2:#333;"
         "--tx:#d4d4d4;--tx2:#888;--hdr:#569cd6;--th:#9cdcfe;--btn:#3a3a3a;--btnH:#4a4a4a}"
@@ -275,8 +277,19 @@ static esp_err_t root_handler(httpd_req_t *req)
         "--tx:#1a1a1a;--tx2:#666;--hdr:#0066b8;--th:#005fa3;--btn:#ddd;--btnH:#ccc}"
         "*{box-sizing:border-box;margin:0;padding:0}"
         "body{font-family:monospace;background:var(--bg);color:var(--tx);padding:8px;min-height:100vh}"
-        "header{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 0;"
+        "header{display:flex;align-items:center;gap:8px;padding:6px 0;"
         "border-bottom:1px solid var(--bd);margin-bottom:8px}"
+        "h1{font-size:15px;color:var(--hdr)}"
+        ".tabs{display:flex;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:0}"
+        ".tab{background:var(--btn);color:var(--tx2);border:1px solid var(--bd2);"
+        "border-bottom:none;border-radius:3px 3px 0 0;padding:5px 14px;"
+        "font-family:monospace;font-size:13px;cursor:pointer;margin-bottom:-1px;position:relative}"
+        ".tab.active{background:var(--bg2);color:var(--hdr);border-color:var(--bd);"
+        "border-bottom-color:var(--bg2);z-index:1}"
+        ".tab:hover:not(.active){background:var(--btnH)}"
+        ".pane{display:none}"
+        ".pane.active{display:block;background:var(--bg2);border:1px solid var(--bd);"
+        "border-top:none;padding:12px;border-radius:0 0 3px 3px}"
         "button{background:var(--btn);color:var(--tx);border:1px solid var(--bd);"
         "border-radius:3px;padding:4px 10px;font-family:monospace;font-size:12px;cursor:pointer}"
         "button:hover{background:var(--btnH)}"
@@ -291,6 +304,13 @@ static esp_err_t root_handler(httpd_req_t *req)
         ".CONNECT{color:#4ec9b0}.DISCONNECT{color:#ce9178}"
         ".READ{color:#569cd6}.WRITE{color:#dcdcaa}"
         ".dt{font-size:10px;color:var(--tx2)}"
+        ".lbl{font-size:11px;color:var(--tx2);margin-bottom:4px}"
+        ".cur{font-size:18px;color:var(--hdr);margin-bottom:12px;min-height:24px}"
+        ".inp{background:var(--bg3);color:var(--tx);border:1px solid var(--bd);border-radius:3px;"
+        "padding:5px 8px;font-family:monospace;font-size:13px;width:100%;margin-bottom:8px}"
+        ".row{display:flex;gap:8px;align-items:center;margin-bottom:10px}"
+        ".row:last-child{margin-bottom:0}"
+        ".lbl2{flex:0 0 130px;font-size:12px;color:var(--tx2)}"
         "@media(max-width:480px){td,th{padding:3px 4px;font-size:11px}}"
         "</style>"
         "<script>var t=localStorage.getItem('t')||'dark';"
@@ -298,41 +318,61 @@ static esp_err_t root_handler(httpd_req_t *req)
         "</script>"
         "</head><body>"
         "<header>"
-        "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='var(--hdr)'"
+        "<svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='var(--hdr)'"
         " stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' style='flex-shrink:0'>"
         "<polyline points='6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5'/></svg>"
-        "<button id='bBle' onclick='tBle()'>...</button>"
-        "<button id='bLog' onclick='tLog()'>...</button>"
-        "<button onclick='clr()'>Clear</button>"
-        "<button onclick='tTheme()'>Theme</button>"
-        "<button class='danger' onclick='rstWifi()'>Reset WiFi</button>"
+        "<h1>ESP32 BLE Server</h1>"
         "</header>"
+        "<div class='tabs'>"
+        "<button class='tab active' id='t0'>Demo</button>"
+        "<button class='tab' id='t1'>Log</button>"
+        "<button class='tab' id='t2'>Settings</button>"
+        "</div>"
+        "<div class='pane active' id='p0'>"
+        "<div class='lbl'>Current NVS value:</div>"
+        "<div class='cur' id='curVal'>...</div>"
+        "<div class='lbl'>New value:</div>"
+        "<input class='inp' id='newVal' type='text' maxlength='20' placeholder='enter value...'>"
+        "<button onclick='writeVal()'>Write to NVS</button>"
+        "</div>"
+        "<div class='pane' id='p1'>"
         "<table><thead>"
         "<tr><th>Time</th><th>Event</th><th>Device</th><th>Char</th><th>Data</th></tr>"
         "</thead><tbody id='tb'></tbody></table>"
+        "</div>"
+        "<div class='pane' id='p2'>"
+        "<div class='row'><span class='lbl2'>BLE Advertising:</span><button id='bBle'>...</button></div>"
+        "<div class='row'><span class='lbl2'>Event Logging:</span><button id='bLog'>...</button></div>"
+        "<div class='row'><span class='lbl2'>Log Entries:</span><button onclick='clr()'>Clear Log</button></div>"
+        "<div class='row'><span class='lbl2'>UI Theme:</span><button onclick='tTheme()'>Toggle Theme</button></div>"
+        "<div class='row'><span class='lbl2'>WiFi:</span>"
+        "<button class='danger' onclick='rstWifi()'>Reset WiFi</button></div>"
+        "</div>"
         "<script>"
+        "var TT=[['t0','p0'],['t1','p1'],['t2','p2']];"
+        "TT.forEach(function(pair){"
+        "document.getElementById(pair[0]).onclick=function(){"
+        "TT.forEach(function(p){"
+        "document.getElementById(p[0]).className='tab';"
+        "document.getElementById(p[1]).className='pane';});"
+        "this.className='tab active';"
+        "document.getElementById(pair[1]).className='pane active';};});"
         "var on=true,ln=true;"
         "function upBtns(){"
         "var b=document.getElementById('bBle');"
         "b.textContent='BLE '+(on?'ON':'OFF');b.className=on?'on':'off';"
         "var l=document.getElementById('bLog');"
         "l.textContent='Log '+(ln?'ON':'OFF');l.className=ln?'on':'off';}"
-        "function fState(){"
-        "fetch('/state').then(r=>r.json()).then(s=>{"
-        "on=s.ble;ln=s.log;"
-        "document.documentElement.className=s.theme==='light'?'light':'';"
-        "localStorage.setItem('t',s.theme);"
-        "upBtns();});}"
-        "function tBle(){"
+        "document.getElementById('bBle').onclick=function(){"
         "fetch('/ble',{method:'POST',body:on?'0':'1'})"
-        ".then(r=>r.json()).then(s=>{on=s.ble;upBtns();});}"
-        "function tLog(){"
+        ".then(r=>r.json()).then(s=>{on=s.ble;upBtns();});};"
+        "document.getElementById('bLog').onclick=function(){"
         "fetch('/logging',{method:'POST',body:ln?'0':'1'})"
-        ".then(r=>r.json()).then(s=>{ln=s.log;upBtns();});}"
+        ".then(r=>r.json()).then(s=>{ln=s.log;upBtns();});};"
         "function clr(){fetch('/clear',{method:'POST'}).then(upd);}"
         "function rstWifi(){"
         "if(!confirm('Reset WiFi? Device will reboot into provisioning mode.'))return;"
-        "fetch('/reset-wifi',{method:'POST'}).then(()=>{"
+        "fetch('/reset-wifi',{method:'POST'}).then(function(){"
         "alert('Rebooting... Connect to AP ESP32_XXXXXX to re-provision.');});}"
         "function tTheme(){"
         "var cur=document.documentElement.className==='light';"
@@ -340,6 +380,20 @@ static esp_err_t root_handler(httpd_req_t *req)
         ".then(r=>r.json()).then(s=>{"
         "document.documentElement.className=s.theme==='light'?'light':'';"
         "localStorage.setItem('t',s.theme);});}"
+        "function loadVal(){"
+        "fetch('/value').then(r=>r.json()).then(d=>{"
+        "document.getElementById('curVal').textContent=d.value;});}"
+        "function writeVal(){"
+        "var v=document.getElementById('newVal').value;"
+        "fetch('/value',{method:'POST',body:v}).then(r=>r.json()).then(d=>{"
+        "document.getElementById('curVal').textContent=d.value;"
+        "document.getElementById('newVal').value='';});}"
+        "function fState(){"
+        "fetch('/state').then(r=>r.json()).then(s=>{"
+        "on=s.ble;ln=s.log;"
+        "document.documentElement.className=s.theme==='light'?'light':'';"
+        "localStorage.setItem('t',s.theme);"
+        "upBtns();});}"
         "function upd(){"
         "fetch('/log').then(r=>r.json()).then(d=>{"
         "var h='';"
@@ -350,11 +404,43 @@ static esp_err_t root_handler(httpd_req_t *req)
         "+'<td>'+e.dev+'</td><td>'+e.ch+'</td><td>'+e.d+'</td></tr>';}"
         "document.getElementById('tb').innerHTML=h;"
         "});}"
-        "fState();upd();setInterval(upd,2000);"
+        "fState();loadVal();upd();"
+        "setInterval(function(){loadVal();upd();},2000);"
         "</script></body></html>";
 
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+}
+
+// GET /value - return current BLE characteristic value as JSON
+static esp_err_t value_get_handler(httpd_req_t *req)
+{
+    char val[BLE_MAX_VALUE_LEN + 1];
+    ble_get_value(val, sizeof(val));
+    char resp[BLE_MAX_VALUE_LEN + 16];
+    snprintf(resp, sizeof(resp), "{\"value\":\"%s\"}", val);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /value - set BLE characteristic value and persist to NVS
+static esp_err_t value_post_handler(httpd_req_t *req)
+{
+    char body[BLE_MAX_VALUE_LEN + 1] = {0};
+    int  recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv < 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    body[recv] = '\0';
+    ble_set_value(body);
+
+    char val[BLE_MAX_VALUE_LEN + 1];
+    ble_get_value(val, sizeof(val));
+    char resp[BLE_MAX_VALUE_LEN + 16];
+    snprintf(resp, sizeof(resp), "{\"value\":\"%s\"}", val);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
 }
 
 // Serve log as JSON array
@@ -562,7 +648,7 @@ void web_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable  = true;
-    config.max_uri_handlers  = 10;
+    config.max_uri_handlers  = 12;
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -571,16 +657,18 @@ void web_server_start(void)
     }
 
     httpd_uri_t uris[] = {
-        { "/",             HTTP_GET,  root_handler,     NULL },
-        { "/log",          HTTP_GET,  log_handler,      NULL },
-        { "/state",        HTTP_GET,  state_handler,    NULL },
-        { "/manifest.json",HTTP_GET,  manifest_handler, NULL },
-        { "/favicon.svg",  HTTP_GET,  favicon_handler,  NULL },
-        { "/ble",          HTTP_POST, ble_ctrl_handler, NULL },
-        { "/logging",      HTTP_POST, log_ctrl_handler, NULL },
-        { "/theme",        HTTP_POST, theme_handler,    NULL },
-        { "/clear",        HTTP_POST, clear_handler,     NULL },
-        { "/reset-wifi",   HTTP_POST, reset_wifi_handler,NULL },
+        { "/",             HTTP_GET,  root_handler,       NULL },
+        { "/log",          HTTP_GET,  log_handler,        NULL },
+        { "/state",        HTTP_GET,  state_handler,      NULL },
+        { "/value",        HTTP_GET,  value_get_handler,  NULL },
+        { "/manifest.json",HTTP_GET,  manifest_handler,   NULL },
+        { "/favicon.svg",  HTTP_GET,  favicon_handler,    NULL },
+        { "/ble",          HTTP_POST, ble_ctrl_handler,   NULL },
+        { "/logging",      HTTP_POST, log_ctrl_handler,   NULL },
+        { "/theme",        HTTP_POST, theme_handler,      NULL },
+        { "/clear",        HTTP_POST, clear_handler,      NULL },
+        { "/reset-wifi",   HTTP_POST, reset_wifi_handler, NULL },
+        { "/value",        HTTP_POST, value_post_handler, NULL },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(server, &uris[i]);

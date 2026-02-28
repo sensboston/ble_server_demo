@@ -375,6 +375,23 @@ void ble_set_wifi_reset_cb(ble_wifi_reset_cb_t cb)
     s_wifi_reset_cb = cb;
 }
 
+void ble_get_value(char *buf, size_t len)
+{
+    if (!buf || len == 0) return;
+    strncpy(buf, cached_value, len - 1);
+    buf[len - 1] = '\0';
+}
+
+esp_err_t ble_set_value(const char *val)
+{
+    if (!val) return ESP_ERR_INVALID_ARG;
+    cached_len = strlen(val);
+    if (cached_len > BLE_MAX_VALUE_LEN) cached_len = BLE_MAX_VALUE_LEN;
+    memcpy(cached_value, val, cached_len);
+    cached_value[cached_len] = '\0';
+    return nvs_write_value(cached_value);
+}
+
 // Initialize and start BLE GATT server
 void ble_server_start(led_strip_handle_t led)
 {
