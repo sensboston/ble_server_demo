@@ -1,10 +1,11 @@
 #pragma once
 
 #include <stdbool.h>
-#include "led_strip.h"
+#include <stddef.h>
+#include "esp_err.h"
 
 // Initialize and start BLE GATT server
-void ble_server_start(led_strip_handle_t led);
+void ble_server_start(void);
 
 // Enable or disable BLE advertising; disconnects active client when disabling
 void ble_set_enabled(bool enabled);

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ble_server.h"
+#include "led_controller.h"
 #include "oled_display.h"
 #include "web_server.h"
 #include "config.h"
@@ -23,96 +24,33 @@
 #define NVS_NAMESPACE       "ble_storage"
 #define NVS_KEY             "ble_value"
 
-// In-RAM cache for the characteristic value to avoid NVS reads on every BLE READ
+// In-RAM cache for the main characteristic value
 static char   cached_value[BLE_MAX_VALUE_LEN + 1];
 static size_t cached_len;
 
 static uint16_t service_handle;
 static uint16_t char_handle;
 static uint16_t reset_char_handle;
+static uint16_t led_char_handle;
 
 static ble_wifi_reset_cb_t s_wifi_reset_cb = NULL;
 
 // Current connected client address (for logging)
 static uint8_t connected_bd_addr[6];
 
-// LED strip handle - received from main
-static led_strip_handle_t led_strip;
+// Track connection state for enable/disable control
+static bool          is_connected    = false;
+static bool          s_ble_enabled   = true;
+static uint16_t      current_conn_id = 0xFFFF;
+static esp_gatt_if_t current_gatts_if = 0xFF;
 
-// FreeRTOS timer for returning LED to connected state after flash
-static TimerHandle_t led_timer;
-
-// Track connection state for timer callback and enable/disable control
-static bool              is_connected     = false;
-static bool              s_ble_enabled    = true;
-static uint16_t          current_conn_id  = 0xFFFF;
-static esp_gatt_if_t     current_gatts_if = 0xFF;
-
-// --- LED helper functions ---
-
-static void led_off(void)
-{
-    led_strip_clear(led_strip);
-    led_strip_refresh(led_strip);
-}
-
-static void led_connected(void)
-{
-    led_strip_set_pixel(led_strip, 0, 0, LED_BRIGHTNESS, 0);
-    led_strip_refresh(led_strip);
-}
-
-static void led_read(void)
-{
-    led_strip_set_pixel(led_strip, 0, 0, 0, LED_BRIGHTNESS);
-    led_strip_refresh(led_strip);
-}
-
-static void led_write(void)
-{
-    led_strip_set_pixel(led_strip, 0, LED_BRIGHTNESS, 0, 0);
-    led_strip_refresh(led_strip);
-}
-
-// Timer callback - restore connected color after flash
-static void led_timer_callback(TimerHandle_t xTimer)
-{
-    if (is_connected)
-        led_connected();
-    else
-        led_off();
-}
-
-// Flash LED for operation, then restore after delay
-static void led_flash_operation(bool is_read)
-{
-    if (is_read)
-        led_read();
-    else
-        led_write();
-
-    // Reset and start one-shot timer to restore color
-    xTimerReset(led_timer, 0);
-}
-
-// --- Advertising parameters - global to reuse on reconnect ---
-static esp_ble_adv_params_t adv_params = {
-    .adv_int_min        = 0x20,
-    .adv_int_max        = 0x40,
-    .adv_type           = ADV_TYPE_IND,
-    .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
-    .channel_map        = ADV_CHNL_ALL,
-    .adv_filter_policy  = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-};
-
-// --- NVS helper functions ---
+// --- NVS helpers ---
 
 static esp_err_t nvs_read_value(char *buf, size_t *len)
 {
     nvs_handle_t handle;
     esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
     if (ret != ESP_OK) return ret;
-
     ret = nvs_get_str(handle, NVS_KEY, buf, len);
     nvs_close(handle);
     return ret;
@@ -123,15 +61,25 @@ static esp_err_t nvs_write_value(const char *buf)
     nvs_handle_t handle;
     esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (ret != ESP_OK) return ret;
-
     ret = nvs_set_str(handle, NVS_KEY, buf);
-    if (ret == ESP_OK)
-        ret = nvs_commit(handle);
+    if (ret == ESP_OK) ret = nvs_commit(handle);
     nvs_close(handle);
     return ret;
 }
 
-// GAP event handler - manages advertising and security events
+// --- Advertising parameters ---
+
+static esp_ble_adv_params_t adv_params = {
+    .adv_int_min        = 0x20,
+    .adv_int_max        = 0x40,
+    .adv_type           = ADV_TYPE_IND,
+    .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
+    .channel_map        = ADV_CHNL_ALL,
+    .adv_filter_policy  = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+};
+
+// --- GAP event handler ---
+
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     switch (event) {
@@ -147,7 +95,6 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         break;
 
     case ESP_GAP_BLE_SEC_REQ_EVT:
-        // Reject all pairing requests - this device does not support pairing
         ESP_LOGI(TAG, "Security request received, rejecting pairing");
         esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, false);
         break;
@@ -157,7 +104,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     }
 }
 
-// GATTS event handler - manages GATT server events
+// --- GATTS event handler ---
+
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                                  esp_ble_gatts_cb_param_t *param)
 {
@@ -166,7 +114,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         ESP_LOGI(TAG, "GATTS registered, app_id: %d", param->reg.app_id);
         esp_ble_gap_set_device_name(BLE_DEVICE_NAME);
 
-        // Create service with 4 handles (service + characteristic + descriptor)
+        // 10 handles: 1 service + 3 characteristics × 2 (declaration + value) + 1 spare
         esp_gatt_srvc_id_t service_id = {
             .is_primary = true,
             .id = {
@@ -177,22 +125,20 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 }
             }
         };
-        esp_ble_gatts_create_service(gatts_if, &service_id, 8);
+        esp_ble_gatts_create_service(gatts_if, &service_id, 10);
         break;
     }
     case ESP_GATTS_CREATE_EVT: {
         ESP_LOGI(TAG, "Service created, handle: %d", param->create.service_handle);
         service_handle = param->create.service_handle;
-
         esp_ble_gatts_start_service(service_handle);
 
-        // Add characteristic with read/write permissions
+        // Add main R/W characteristic (persistent string value)
         esp_bt_uuid_t char_uuid = {
             .len = ESP_UUID_LEN_16,
             .uuid = { .uuid16 = BLE_CHAR_UUID }
         };
 
-        // Load value from NVS into cache, use default if not found
         cached_len = sizeof(cached_value);
         if (nvs_read_value(cached_value, &cached_len) != ESP_OK) {
             ESP_LOGI(TAG, "No NVS value found, using default: %s", BLE_DEFAULT_VALUE);
@@ -217,9 +163,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         uint16_t uuid16 = param->add_char.char_uuid.uuid.uuid16;
         ESP_LOGI(TAG, "Characteristic added, uuid: 0x%04X, handle: %d",
                  uuid16, param->add_char.attr_handle);
+
         if (uuid16 == BLE_CHAR_UUID) {
             char_handle = param->add_char.attr_handle;
-            // Chain: add the WiFi-reset write-only characteristic
+            // Chain: add WiFi reset characteristic
             esp_bt_uuid_t reset_uuid = {
                 .len = ESP_UUID_LEN_16,
                 .uuid = { .uuid16 = BLE_RESET_CHAR_UUID }
@@ -228,16 +175,27 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                                    ESP_GATT_PERM_WRITE,
                                    ESP_GATT_CHAR_PROP_BIT_WRITE,
                                    NULL, NULL);
+
         } else if (uuid16 == BLE_RESET_CHAR_UUID) {
             reset_char_handle = param->add_char.attr_handle;
+            // Chain: add LED control characteristic
+            esp_bt_uuid_t led_uuid = {
+                .len = ESP_UUID_LEN_16,
+                .uuid = { .uuid16 = BLE_LED_CHAR_UUID }
+            };
+            esp_ble_gatts_add_char(service_handle, &led_uuid,
+                                   ESP_GATT_PERM_WRITE,
+                                   ESP_GATT_CHAR_PROP_BIT_WRITE,
+                                   NULL, NULL);
+
+        } else if (uuid16 == BLE_LED_CHAR_UUID) {
+            led_char_handle = param->add_char.attr_handle;
         }
         break;
     }
 
     case ESP_GATTS_START_EVT: {
         ESP_LOGI(TAG, "Service started");
-
-        // Configure advertising data
         esp_ble_adv_data_t adv_data = {
             .set_scan_rsp        = false,
             .include_name        = true,
@@ -258,13 +216,14 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         oled_set_line(1, "ADVERTISING");
         break;
     }
+
     case ESP_GATTS_CONNECT_EVT:
         ESP_LOGI(TAG, "Client connected, conn_id: %d", param->connect.conn_id);
-        is_connected    = true;
-        current_conn_id = param->connect.conn_id;
+        is_connected     = true;
+        current_conn_id  = param->connect.conn_id;
         current_gatts_if = gatts_if;
         memcpy(connected_bd_addr, param->connect.remote_bda, 6);
-        led_connected();
+        led_ctrl_ble_connected(true);
         web_log_connect(connected_bd_addr);
         oled_set_line(1, "CONNECTED");
         break;
@@ -274,7 +233,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         is_connected    = false;
         current_conn_id = 0xFFFF;
         web_log_disconnect(connected_bd_addr);
-        led_off();
+        led_ctrl_ble_connected(false);
         if (s_ble_enabled)
             esp_ble_gap_start_advertising(&adv_params);
         oled_set_line(1, s_ble_enabled ? "ADVERTISING" : "DISABLED");
@@ -284,17 +243,9 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         ESP_LOGI(TAG, "Read request, conn_id: %d, handle: %d",
                  param->read.conn_id, param->read.handle);
 
-        // Flash blue for read operation
-        led_flash_operation(true);
-
+        led_ctrl_ble_flash(true);
         web_log_read(connected_bd_addr, BLE_CHAR_UUID, cached_value);
-        {
-            char oled_buf[22];
-            snprintf(oled_buf, sizeof(oled_buf), "R: %.18s", cached_value);
-            oled_set_line(2, oled_buf);
-        }
 
-        // Send cached value to client (no NVS access needed)
         esp_gatt_rsp_t rsp = {0};
         rsp.attr_value.handle = param->read.handle;
         rsp.attr_value.len    = cached_len;
@@ -304,12 +255,12 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         ESP_LOGI(TAG, "Read response sent: %s", cached_value);
         break;
     }
+
     case ESP_GATTS_WRITE_EVT: {
         ESP_LOGI(TAG, "Write request, conn_id: %d, handle: %d, len: %d",
                  param->write.conn_id, param->write.handle, param->write.len);
 
         if (param->write.handle == reset_char_handle) {
-            // WiFi reset characteristic: value "1" triggers reset
             if (param->write.len >= 1 && param->write.value[0] == '1') {
                 ESP_LOGI(TAG, "WiFi reset requested via BLE");
                 if (param->write.need_rsp)
@@ -320,10 +271,25 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             break;
         }
 
-        // Default characteristic: flash red, update cache, persist to NVS
-        led_flash_operation(false);
+        if (param->write.handle == led_char_handle) {
+            // LED command: null-terminate and apply
+            size_t cmd_len = param->write.len < BLE_LED_CMD_MAX_LEN
+                             ? param->write.len : BLE_LED_CMD_MAX_LEN;
+            char cmd[BLE_LED_CMD_MAX_LEN + 1] = {0};
+            memcpy(cmd, param->write.value, cmd_len);
+            ESP_LOGI(TAG, "LED command via BLE: %s", cmd);
+            led_ctrl_apply_command(cmd);
+            if (param->write.need_rsp)
+                esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
+                                            param->write.trans_id, ESP_GATT_OK, NULL);
+            break;
+        }
 
-        cached_len = param->write.len < BLE_MAX_VALUE_LEN ? param->write.len : BLE_MAX_VALUE_LEN;
+        // Main characteristic: flash red, update cache, persist to NVS
+        led_ctrl_ble_flash(false);
+
+        cached_len = param->write.len < BLE_MAX_VALUE_LEN
+                     ? param->write.len : BLE_MAX_VALUE_LEN;
         memcpy(cached_value, param->write.value, cached_len);
         cached_value[cached_len] = '\0';
 
@@ -334,17 +300,13 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(ret));
 
         web_log_write(connected_bd_addr, BLE_CHAR_UUID, cached_value);
-        {
-            char oled_buf[22];
-            snprintf(oled_buf, sizeof(oled_buf), "W: %.18s", cached_value);
-            oled_set_line(2, oled_buf);
-        }
 
         if (param->write.need_rsp)
             esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
                                         param->write.trans_id, ESP_GATT_OK, NULL);
         break;
     }
+
     default:
         break;
     }
@@ -392,43 +354,27 @@ esp_err_t ble_set_value(const char *val)
     return nvs_write_value(cached_value);
 }
 
-// Initialize and start BLE GATT server
-void ble_server_start(led_strip_handle_t led)
+void ble_server_start(void)
 {
-    led_strip = led;
-
-    // Create one-shot timer for restoring LED color after flash
-    led_timer = xTimerCreate("led_timer",
-                              pdMS_TO_TICKS(LED_FLASH_DURATION_MS),
-                              pdFALSE,
-                              NULL,
-                              led_timer_callback);
-
     // Release Classic BT memory - ESP32-C3 supports BLE only
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
-    // Initialize BT controller with default config
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
     ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
 
-    // Initialize and enable Bluedroid stack
     ESP_ERROR_CHECK(esp_bluedroid_init());
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
     ESP_LOGI(TAG, "Bluetooth initialized");
 
-    // Configure security - no bonding, no MITM, reject all pairing requests
     esp_ble_auth_req_t auth_req = ESP_LE_AUTH_NO_BOND;
     esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(auth_req));
 
     uint8_t iocap = ESP_IO_CAP_NONE;
     esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
 
-    // Register GAP and GATTS callbacks
     ESP_ERROR_CHECK(esp_ble_gap_register_callback(gap_event_handler));
     ESP_ERROR_CHECK(esp_ble_gatts_register_callback(gatts_event_handler));
-
-    // Register GATTS application profile
     ESP_ERROR_CHECK(esp_ble_gatts_app_register(PROFILE_APP_ID));
 }

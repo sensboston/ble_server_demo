@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "ble_server.h"
+#include "led_controller.h"
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
@@ -334,6 +335,20 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<div class='lbl'>New value:</div>"
         "<input class='inp' id='newVal' type='text' maxlength='20' placeholder='enter value...'>"
         "<button onclick='writeVal()'>Write to NVS</button>"
+        "<hr style='border:none;border-top:1px solid var(--bd);margin:12px 0'>"
+        "<div class='lbl'>LED Color:</div>"
+        "<div class='row'>"
+        "<input type='color' id='ledColor' value='#ff0000' style='width:44px;height:30px;"
+        "border:1px solid var(--bd);border-radius:3px;background:none;cursor:pointer;padding:2px'>"
+        "<button onclick='setLedColor()'>Set Color</button>"
+        "</div>"
+        "<div class='lbl'>LED Animation:</div>"
+        "<div class='row'>"
+        "<button id='btnOff'    onclick='setLedAnim(\"off\")'>Off</button>"
+        "<button id='btnFade'   onclick='setLedAnim(\"fade\")'>Fade</button>"
+        "<button id='btnFire'   onclick='setLedAnim(\"fire\")'>Fire</button>"
+        "<button id='btnRainbow' onclick='setLedAnim(\"rainbow\")'>Rainbow</button>"
+        "</div>"
         "</div>"
         "<div class='pane' id='p1'>"
         "<table><thead>"
@@ -388,6 +403,16 @@ static esp_err_t root_handler(httpd_req_t *req)
         "fetch('/value',{method:'POST',body:v}).then(r=>r.json()).then(d=>{"
         "document.getElementById('curVal').textContent=d.value;"
         "document.getElementById('newVal').value='';});}"
+        "var ledAnims=['btnOff','btnFade','btnFire','btnRainbow'];"
+        "function setLedActive(id){"
+        "ledAnims.forEach(function(a){document.getElementById(a).className='';});"
+        "if(id)document.getElementById(id).className='on';}"
+        "function setLedColor(){"
+        "var v=document.getElementById('ledColor').value.slice(1);"
+        "fetch('/led/color',{method:'POST',body:v}).then(function(){setLedActive(null);});}"
+        "function setLedAnim(a){"
+        "var ids={'off':'btnOff','fade':'btnFade','fire':'btnFire','rainbow':'btnRainbow'};"
+        "fetch('/led/anim',{method:'POST',body:a}).then(function(){setLedActive(ids[a]);});}"
         "function fState(){"
         "fetch('/state').then(r=>r.json()).then(s=>{"
         "on=s.ble;ln=s.log;"
@@ -441,6 +466,30 @@ static esp_err_t value_post_handler(httpd_req_t *req)
     snprintf(resp, sizeof(resp), "{\"value\":\"%s\"}", val);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /led/color - body: "RRGGBB" hex
+static esp_err_t led_color_handler(httpd_req_t *req)
+{
+    char body[8] = {0};
+    int  recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
+    body[recv] = '\0';
+    led_ctrl_apply_command(body);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /led/anim - body: "fade" | "fire" | "rainbow" | "off"
+static esp_err_t led_anim_handler(httpd_req_t *req)
+{
+    char body[10] = {0};
+    int  recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
+    body[recv] = '\0';
+    led_ctrl_apply_command(body);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
 // Serve log as JSON array
@@ -648,7 +697,7 @@ void web_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable  = true;
-    config.max_uri_handlers  = 12;
+    config.max_uri_handlers  = 14;
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -669,6 +718,8 @@ void web_server_start(void)
         { "/clear",        HTTP_POST, clear_handler,      NULL },
         { "/reset-wifi",   HTTP_POST, reset_wifi_handler, NULL },
         { "/value",        HTTP_POST, value_post_handler, NULL },
+        { "/led/color",   HTTP_POST, led_color_handler,  NULL },
+        { "/led/anim",    HTTP_POST, led_anim_handler,   NULL },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(server, &uris[i]);

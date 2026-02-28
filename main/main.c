@@ -10,6 +10,7 @@
 #include "web_server.h"
 #include "ntp_sync.h"
 #include "oled_display.h"
+#include "led_controller.h"
 
 
 #define TAG "MAIN"
@@ -28,7 +29,7 @@ static void wifi_task(void *arg)
 // BLE server task - runs GATT server independently of WiFi
 static void ble_task(void *arg)
 {
-    ble_server_start(led_strip);
+    ble_server_start();
     vTaskDelete(NULL);
 }
 
@@ -55,6 +56,7 @@ void app_main(void)
     led_strip_clear(led_strip);
     led_strip_refresh(led_strip);
     ESP_LOGI(TAG, "LED initialized");
+    led_ctrl_init(led_strip);
 
     // Initialize OLED display
     if (oled_init() == ESP_OK) {
