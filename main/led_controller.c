@@ -3,6 +3,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include "esp_log.h"
+#include "nvs.h"
+
+#define LED_NVS_NS  "led_ctrl"
+#define LED_NVS_KEY "color"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
@@ -26,9 +30,21 @@ static led_strip_handle_t s_led        = NULL;
 static SemaphoreHandle_t  s_mutex      = NULL;
 static TimerHandle_t      s_flash_tmr  = NULL;
 
-static led_mode_t s_mode      = LED_MODE_STATUS;
-static led_anim_t s_anim      = LED_ANIM_NONE;
-static bool       s_connected = false;
+static led_mode_t s_mode        = LED_MODE_STATUS;
+static led_anim_t s_anim        = LED_ANIM_NONE;
+static bool       s_connected   = false;
+static char       s_cached_cmd[9] = "off"; // current command string for BLE read
+
+// --- NVS helpers ---
+
+static void nvs_save_color(const char *hex6)
+{
+    nvs_handle_t h;
+    if (nvs_open(LED_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, LED_NVS_KEY, hex6);
+    nvs_commit(h);
+    nvs_close(h);
+}
 
 // --- Low-level LED write (always call with s_mutex held) ---
 
@@ -142,9 +158,28 @@ void led_ctrl_init(led_strip_handle_t led)
                                pdMS_TO_TICKS(LED_FLASH_DURATION_MS),
                                pdFALSE, NULL, flash_timer_cb);
 
+    // Restore saved color from NVS (before task starts; no concurrency yet)
+    char saved[9] = {0};
+    size_t len = sizeof(saved);
+    nvs_handle_t h;
+    if (nvs_open(LED_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_str(h, LED_NVS_KEY, saved, &len) == ESP_OK)
+            led_ctrl_apply_command(saved); // applies if valid hex, ignored otherwise
+        nvs_close(h);
+    }
+
     xTaskCreate(anim_task, "led_anim", LED_ANIM_TASK_STACK, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "LED controller initialized");
+}
+
+void led_ctrl_get_command(char *buf, size_t len)
+{
+    if (!buf || len == 0) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    strncpy(buf, s_cached_cmd, len - 1);
+    buf[len - 1] = '\0';
+    xSemaphoreGive(s_mutex);
 }
 
 bool led_ctrl_apply_command(const char *cmd)
@@ -156,6 +191,7 @@ bool led_ctrl_apply_command(const char *cmd)
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_mode = LED_MODE_STATUS;
         s_anim = LED_ANIM_NONE;
+        strncpy(s_cached_cmd, "off", sizeof(s_cached_cmd) - 1);
         if (s_connected) set_raw(0, LED_BRIGHTNESS, 0); else set_off();
         xSemaphoreGive(s_mutex);
         return true;
@@ -164,6 +200,7 @@ bool led_ctrl_apply_command(const char *cmd)
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_mode = LED_MODE_DEMO;
         s_anim = LED_ANIM_FADE;
+        strncpy(s_cached_cmd, "fade", sizeof(s_cached_cmd) - 1);
         xSemaphoreGive(s_mutex);
         return true;
     }
@@ -171,6 +208,7 @@ bool led_ctrl_apply_command(const char *cmd)
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_mode = LED_MODE_DEMO;
         s_anim = LED_ANIM_FIRE;
+        strncpy(s_cached_cmd, "fire", sizeof(s_cached_cmd) - 1);
         xSemaphoreGive(s_mutex);
         return true;
     }
@@ -178,6 +216,7 @@ bool led_ctrl_apply_command(const char *cmd)
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_mode = LED_MODE_DEMO;
         s_anim = LED_ANIM_RAINBOW;
+        strncpy(s_cached_cmd, "rainbow", sizeof(s_cached_cmd) - 1);
         xSemaphoreGive(s_mutex);
         return true;
     }
@@ -204,11 +243,19 @@ bool led_ctrl_apply_command(const char *cmd)
         g = (uint16_t)g * LED_DEMO_BRIGHTNESS / 255;
         b = (uint16_t)b * LED_DEMO_BRIGHTNESS / 255;
 
+        // Copy hex string before taking mutex (for NVS save after release)
+        char hex_save[7];
+        memcpy(hex_save, cmd, 6);
+        hex_save[6] = '\0';
+
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_mode = LED_MODE_DEMO;
         s_anim = LED_ANIM_NONE;
+        memcpy(s_cached_cmd, hex_save, 7);
         set_raw(r, g, b);
         xSemaphoreGive(s_mutex);
+
+        nvs_save_color(hex_save); // persist outside mutex (flash write can be slow)
         return true;
     }
 

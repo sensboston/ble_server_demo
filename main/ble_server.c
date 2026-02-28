@@ -30,10 +30,7 @@ static size_t cached_len;
 
 static uint16_t service_handle;
 static uint16_t char_handle;
-static uint16_t reset_char_handle;
 static uint16_t led_char_handle;
-
-static ble_wifi_reset_cb_t s_wifi_reset_cb = NULL;
 
 // Current connected client address (for logging)
 static uint8_t connected_bd_addr[6];
@@ -114,7 +111,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         ESP_LOGI(TAG, "GATTS registered, app_id: %d", param->reg.app_id);
         esp_ble_gap_set_device_name(BLE_DEVICE_NAME);
 
-        // 10 handles: 1 service + 3 characteristics × 2 (declaration + value) + 1 spare
+        // 6 handles: 1 service + 2 characteristics x 2 (declaration + value) + 1 spare
         esp_gatt_srvc_id_t service_id = {
             .is_primary = true,
             .id = {
@@ -166,26 +163,14 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 
         if (uuid16 == BLE_CHAR_UUID) {
             char_handle = param->add_char.attr_handle;
-            // Chain: add WiFi reset characteristic
-            esp_bt_uuid_t reset_uuid = {
-                .len = ESP_UUID_LEN_16,
-                .uuid = { .uuid16 = BLE_RESET_CHAR_UUID }
-            };
-            esp_ble_gatts_add_char(service_handle, &reset_uuid,
-                                   ESP_GATT_PERM_WRITE,
-                                   ESP_GATT_CHAR_PROP_BIT_WRITE,
-                                   NULL, NULL);
-
-        } else if (uuid16 == BLE_RESET_CHAR_UUID) {
-            reset_char_handle = param->add_char.attr_handle;
-            // Chain: add LED control characteristic
+            // Chain: add LED control characteristic (R/W: color or animation command)
             esp_bt_uuid_t led_uuid = {
                 .len = ESP_UUID_LEN_16,
                 .uuid = { .uuid16 = BLE_LED_CHAR_UUID }
             };
             esp_ble_gatts_add_char(service_handle, &led_uuid,
-                                   ESP_GATT_PERM_WRITE,
-                                   ESP_GATT_CHAR_PROP_BIT_WRITE,
+                                   ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+                                   ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE,
                                    NULL, NULL);
 
         } else if (uuid16 == BLE_LED_CHAR_UUID) {
@@ -243,6 +228,19 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         ESP_LOGI(TAG, "Read request, conn_id: %d, handle: %d",
                  param->read.conn_id, param->read.handle);
 
+        if (param->read.handle == led_char_handle) {
+            char led_cmd[9] = {0};
+            led_ctrl_get_command(led_cmd, sizeof(led_cmd));
+            esp_gatt_rsp_t rsp = {0};
+            rsp.attr_value.handle = param->read.handle;
+            rsp.attr_value.len    = strlen(led_cmd);
+            memcpy(rsp.attr_value.value, led_cmd, rsp.attr_value.len);
+            esp_ble_gatts_send_response(gatts_if, param->read.conn_id,
+                                        param->read.trans_id, ESP_GATT_OK, &rsp);
+            ESP_LOGI(TAG, "LED read response: %s", led_cmd);
+            break;
+        }
+
         led_ctrl_ble_flash(true);
         web_log_read(connected_bd_addr, BLE_CHAR_UUID, cached_value);
 
@@ -259,17 +257,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
     case ESP_GATTS_WRITE_EVT: {
         ESP_LOGI(TAG, "Write request, conn_id: %d, handle: %d, len: %d",
                  param->write.conn_id, param->write.handle, param->write.len);
-
-        if (param->write.handle == reset_char_handle) {
-            if (param->write.len >= 1 && param->write.value[0] == '1') {
-                ESP_LOGI(TAG, "WiFi reset requested via BLE");
-                if (param->write.need_rsp)
-                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
-                                                param->write.trans_id, ESP_GATT_OK, NULL);
-                if (s_wifi_reset_cb) s_wifi_reset_cb();
-            }
-            break;
-        }
 
         if (param->write.handle == led_char_handle) {
             // LED command: null-terminate and apply
@@ -330,11 +317,6 @@ void ble_set_enabled(bool enabled)
 bool ble_is_enabled(void)
 {
     return s_ble_enabled;
-}
-
-void ble_set_wifi_reset_cb(ble_wifi_reset_cb_t cb)
-{
-    s_wifi_reset_cb = cb;
 }
 
 void ble_get_value(char *buf, size_t len)
