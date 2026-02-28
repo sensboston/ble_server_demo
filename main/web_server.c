@@ -1,0 +1,290 @@
+#include "web_server.h"
+#include <string.h>
+#include <stdio.h>
+#include "esp_log.h"
+#include "esp_http_server.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+#define TAG "WEB_SERVER"
+
+// --- Storage ---
+
+// Known device addresses table
+static uint8_t  device_addrs[LOG_MAX_DEVICES][6];
+static uint8_t  device_count = 0;
+
+// Known characteristic UUIDs table
+static uint16_t char_uuids[LOG_MAX_CHARS];
+static uint8_t  char_count = 0;
+
+// Ring buffer for log entries
+static log_entry_t log_entries[LOG_MAX_ENTRIES];
+static uint16_t    log_head  = 0;   // Index of oldest entry
+static uint16_t    log_count = 0;   // Number of valid entries
+
+// Pool for READ/WRITE string data
+static char     data_pool[LOG_DATA_POOL_SIZE];
+static uint16_t data_pool_pos = 0;  // Next write position (wraps around)
+
+static SemaphoreHandle_t log_mutex;
+
+// --- Internal helpers ---
+
+// Find or register a device address, return its index
+static uint8_t get_device_idx(const uint8_t *bd_addr)
+{
+    if (!bd_addr) return 0xFF;
+
+    for (uint8_t i = 0; i < device_count; i++) {
+        if (memcmp(device_addrs[i], bd_addr, 6) == 0)
+            return i;
+    }
+    if (device_count < LOG_MAX_DEVICES) {
+        memcpy(device_addrs[device_count], bd_addr, 6);
+        return device_count++;
+    }
+    return 0xFF; // Table full
+}
+
+// Store a string in data pool, return its offset (0xFFFF if no data)
+static uint16_t store_data(const char *value)
+{
+    if (!value || value[0] == '\0') return 0xFFFF;
+
+    size_t len = strlen(value) + 1; // Include null terminator
+    if (len > 64) len = 64;         // Limit single entry size
+
+    // Wrap around if not enough space at end
+    if (data_pool_pos + len > LOG_DATA_POOL_SIZE)
+        data_pool_pos = 0;
+
+    uint16_t offset = data_pool_pos;
+    memcpy(data_pool + offset, value, len);
+    data_pool[offset + len - 1] = '\0';
+    data_pool_pos += len;
+    return offset;
+}
+
+// Add a log entry to ring buffer
+static void log_add(uint8_t device_idx, ble_event_type_t event,
+                    uint8_t char_idx, uint16_t data_offset)
+{
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+
+    uint16_t idx = (log_head + log_count) % LOG_MAX_ENTRIES;
+
+    if (log_count >= LOG_MAX_ENTRIES) {
+        // Buffer full - overwrite oldest entry
+        log_head = (log_head + 1) % LOG_MAX_ENTRIES;
+    } else {
+        log_count++;
+    }
+
+    log_entries[idx].timestamp_ms = pdTICKS_TO_MS(xTaskGetTickCount());
+    log_entries[idx].device_idx   = device_idx;
+    log_entries[idx].event_type   = (uint8_t)event;
+    log_entries[idx].char_idx     = char_idx;
+    log_entries[idx].data_offset  = data_offset;
+
+    xSemaphoreGive(log_mutex);
+}
+
+// --- Public API ---
+
+// Register a characteristic UUID - returns its index
+uint8_t web_log_register_char(uint16_t uuid)
+{
+    for (uint8_t i = 0; i < char_count; i++) {
+        if (char_uuids[i] == uuid) return i;
+    }
+    if (char_count < LOG_MAX_CHARS) {
+        char_uuids[char_count] = uuid;
+        return char_count++;
+    }
+    return 0xFF;
+}
+
+void web_log_connect(const uint8_t *bd_addr)
+{
+    uint8_t didx = get_device_idx(bd_addr);
+    log_add(didx, BLE_EVT_CONNECT, 0xFF, 0xFFFF);
+}
+
+void web_log_disconnect(const uint8_t *bd_addr)
+{
+    uint8_t didx = get_device_idx(bd_addr);
+    log_add(didx, BLE_EVT_DISCONNECT, 0xFF, 0xFFFF);
+}
+
+void web_log_read(const uint8_t *bd_addr, uint16_t char_uuid, const char *value)
+{
+    uint8_t  didx  = get_device_idx(bd_addr);
+    uint8_t  cidx  = web_log_register_char(char_uuid);
+    uint16_t doff  = store_data(value);
+    log_add(didx, BLE_EVT_READ, cidx, doff);
+}
+
+void web_log_write(const uint8_t *bd_addr, uint16_t char_uuid, const char *value)
+{
+    uint8_t  didx  = get_device_idx(bd_addr);
+    uint8_t  cidx  = web_log_register_char(char_uuid);
+    uint16_t doff  = store_data(value);
+    log_add(didx, BLE_EVT_WRITE, cidx, doff);
+}
+
+// --- HTTP handlers ---
+
+static const char *event_name(uint8_t evt)
+{
+    switch (evt) {
+    case BLE_EVT_CONNECT:    return "CONNECT";
+    case BLE_EVT_DISCONNECT: return "DISCONNECT";
+    case BLE_EVT_READ:       return "READ";
+    case BLE_EVT_WRITE:      return "WRITE";
+    default:                 return "UNKNOWN";
+    }
+}
+
+// Serve main HTML page
+static esp_err_t root_handler(httpd_req_t *req)
+{
+    const char *html =
+        "<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>ESP32 BLE Monitor</title>"
+        "<style>"
+        "body{font-family:monospace;background:#1e1e1e;color:#d4d4d4;margin:20px}"
+        "h1{color:#569cd6;border-bottom:1px solid #444;padding-bottom:8px}"
+        "table{width:100%;border-collapse:collapse;margin-top:16px}"
+        "th{background:#2d2d2d;color:#9cdcfe;padding:8px;text-align:left;border:1px solid #444}"
+        "td{padding:6px 8px;border:1px solid #333;font-size:13px}"
+        "tr:nth-child(even){background:#252525}"
+        ".CONNECT{color:#4ec9b0}.DISCONNECT{color:#ce9178}"
+        ".READ{color:#569cd6}.WRITE{color:#dcdcaa}"
+        ".status{font-size:12px;color:#888;margin-top:8px}"
+        "</style></head><body>"
+        "<h1>&#x1F4F6; ESP32 BLE Server Monitor</h1>"
+        "<div class='status' id='status'>Connecting...</div>"
+        "<table><thead>"
+        "<tr><th>Time (s)</th><th>Event</th><th>Device</th><th>Characteristic</th><th>Data</th></tr>"
+        "</thead><tbody id='log'></tbody></table>"
+        "<script>"
+        "function update(){"
+        "fetch('/log').then(r=>r.json()).then(data=>{"
+        "var rows='';"
+        "for(var i=data.length-1;i>=0;i--){"
+        "var e=data[i];"
+        "rows+='<tr><td>'+e.t+'</td><td class=\"'+e.ev+'\">'+e.ev+'</td>"
+        "<td>'+e.dev+'</td><td>'+e.ch+'</td><td>'+e.d+'</td></tr>';}"
+        "document.getElementById('log').innerHTML=rows;"
+        "document.getElementById('status').innerText="
+        "'Entries: '+data.length+' | Updated: '+new Date().toLocaleTimeString();});"
+        "}"
+        "update();setInterval(update,2000);"
+        "</script></body></html>";
+
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+}
+
+// Serve log as JSON array
+static esp_err_t log_handler(httpd_req_t *req)
+{
+    // Allocate response buffer - each JSON entry ~120 chars
+    size_t buf_size = log_count * 130 + 8;
+    if (buf_size < 256) buf_size = 256;
+
+    char *buf = malloc(buf_size);
+    if (!buf) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        free(buf);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int pos = 0;
+    buf[pos++] = '[';
+
+    for (uint16_t i = 0; i < log_count; i++) {
+        uint16_t idx = (log_head + i) % LOG_MAX_ENTRIES;
+        log_entry_t *e = &log_entries[idx];
+
+        // Format device address
+        char dev_str[20] = "unknown";
+        if (e->device_idx < device_count) {
+            uint8_t *a = device_addrs[e->device_idx];
+            snprintf(dev_str, sizeof(dev_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     a[0], a[1], a[2], a[3], a[4], a[5]);
+        }
+
+        // Format characteristic UUID
+        char char_str[12] = "-";
+        if (e->char_idx < char_count)
+            snprintf(char_str, sizeof(char_str), "0x%04X", char_uuids[e->char_idx]);
+
+        // Get data string
+        const char *data_str = "";
+        if (e->data_offset != 0xFFFF && e->data_offset < LOG_DATA_POOL_SIZE)
+            data_str = data_pool + e->data_offset;
+
+        // Format timestamp
+        uint32_t sec = e->timestamp_ms / 1000;
+        uint32_t ms  = e->timestamp_ms % 1000;
+
+        pos += snprintf(buf + pos, 130,
+                        "%s{\"t\":\"%lu.%03lu\",\"ev\":\"%s\","
+                        "\"dev\":\"%s\",\"ch\":\"%s\",\"d\":\"%s\"}",
+                        i > 0 ? "," : "",
+                        sec, ms,
+                        event_name(e->event_type),
+                        dev_str, char_str, data_str);
+    }
+
+    buf[pos++] = ']';
+    buf[pos]   = '\0';
+
+    xSemaphoreGive(log_mutex);
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t ret = httpd_resp_send(req, buf, pos);
+    free(buf);
+    return ret;
+}
+
+// Initialize and start HTTP web server
+void web_server_start(void)
+{
+    log_mutex = xSemaphoreCreateMutex();
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.lru_purge_enable = true;
+
+    httpd_handle_t server = NULL;
+    if (httpd_start(&server, &config) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start HTTP server");
+        return;
+    }
+
+    httpd_uri_t root = {
+        .uri     = "/",
+        .method  = HTTP_GET,
+        .handler = root_handler,
+    };
+    httpd_register_uri_handler(server, &root);
+
+    httpd_uri_t log_uri = {
+        .uri     = "/log",
+        .method  = HTTP_GET,
+        .handler = log_handler,
+    };
+    httpd_register_uri_handler(server, &log_uri);
+
+    ESP_LOGI(TAG, "HTTP server started, open http://<device-ip>/ in browser");
+}
