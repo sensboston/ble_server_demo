@@ -7,6 +7,7 @@
 #include <time.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_timer.h"
 #include "nvs.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
@@ -223,16 +224,60 @@ void web_log_write(const uint8_t *bd_addr, uint16_t char_uuid, const char *value
     xSemaphoreGive(log_mutex);
 }
 
+// Log a web UI action (caller must NOT hold log_mutex)
+static void web_log_action(const char *desc)
+{
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    uint16_t doff = store_data(desc);
+    // Always log web actions regardless of s_log_enabled
+    uint16_t idx = (log_head + log_count) % LOG_MAX_ENTRIES;
+    if (log_count >= LOG_MAX_ENTRIES) {
+        log_head = (log_head + 1) % LOG_MAX_ENTRIES;
+    } else {
+        log_count++;
+    }
+    time_t now;
+    time(&now);
+    log_entries[idx].timestamp   = (uint32_t)now;
+    log_entries[idx].device_idx  = 0xFF;
+    log_entries[idx].event_type  = WEB_EVT_ACTION;
+    log_entries[idx].char_idx    = 0xFF;
+    log_entries[idx].data_offset = doff;
+    xSemaphoreGive(log_mutex);
+}
+
+void web_log_boot(void)
+{
+    // Compute actual boot wall-clock time: current time minus seconds since boot
+    time_t boot_ts = time(NULL) - (time_t)(esp_timer_get_time() / 1000000LL);
+
+    if (xSemaphoreTake(log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    uint16_t doff = store_data("Boot");
+    uint16_t idx  = (log_head + log_count) % LOG_MAX_ENTRIES;
+    if (log_count >= LOG_MAX_ENTRIES) {
+        log_head = (log_head + 1) % LOG_MAX_ENTRIES;
+    } else {
+        log_count++;
+    }
+    log_entries[idx].timestamp   = (uint32_t)boot_ts;
+    log_entries[idx].device_idx  = 0xFF;
+    log_entries[idx].event_type  = WEB_EVT_ACTION;
+    log_entries[idx].char_idx    = 0xFF;
+    log_entries[idx].data_offset = doff;
+    xSemaphoreGive(log_mutex);
+}
+
 // --- HTTP handlers ---
 
 static const char *event_name(uint8_t evt)
 {
     switch (evt) {
-    case BLE_EVT_CONNECT:    return "CONNECT";
-    case BLE_EVT_DISCONNECT: return "DISCONNECT";
-    case BLE_EVT_READ:       return "READ";
-    case BLE_EVT_WRITE:      return "WRITE";
-    default:                 return "UNKNOWN";
+    case BLE_EVT_CONNECT:    return "CONN";
+    case BLE_EVT_DISCONNECT: return "DISC";
+    case BLE_EVT_READ:       return "RD";
+    case BLE_EVT_WRITE:      return "WR";
+    case WEB_EVT_ACTION:     return "HTTP";
+    default:                 return "?";
     }
 }
 
@@ -277,7 +322,9 @@ static esp_err_t root_handler(httpd_req_t *req)
         ".light{--bg:#f5f5f5;--bg2:#e8e8e8;--bg3:#efefef;--bd:#ccc;--bd2:#ddd;"
         "--tx:#1a1a1a;--tx2:#666;--hdr:#0066b8;--th:#005fa3;--btn:#ddd;--btnH:#ccc}"
         "*{box-sizing:border-box;margin:0;padding:0}"
-        "body{font-family:monospace;background:var(--bg);color:var(--tx);padding:8px;min-height:100vh}"
+        "html{height:100%}"
+        "body{font-family:monospace;background:var(--bg);color:var(--tx);padding:8px;height:100%;"
+        "max-width:540px;margin:0 auto;display:flex;flex-direction:column}"
         "header{display:flex;align-items:center;gap:8px;padding:6px 0;"
         "border-bottom:1px solid var(--bd);margin-bottom:8px}"
         "h1{font-size:15px;color:var(--hdr)}"
@@ -289,7 +336,8 @@ static esp_err_t root_handler(httpd_req_t *req)
         "border-bottom-color:var(--bg2);z-index:1}"
         ".tab:hover:not(.active){background:var(--btnH)}"
         ".pane{display:none}"
-        ".pane.active{display:block;background:var(--bg2);border:1px solid var(--bd);"
+        ".pane.active{display:flex;flex-direction:column;flex:1;min-height:0;"
+        "background:var(--bg2);border:1px solid var(--bd);"
         "border-top:none;padding:12px;border-radius:0 0 3px 3px}"
         "button{background:var(--btn);color:var(--tx);border:1px solid var(--bd);"
         "border-radius:3px;padding:4px 10px;font-family:monospace;font-size:12px;cursor:pointer}"
@@ -302,8 +350,8 @@ static esp_err_t root_handler(httpd_req_t *req)
         "border:1px solid var(--bd);white-space:nowrap}"
         "td{padding:4px 6px;border:1px solid var(--bd2);font-size:12px;vertical-align:top}"
         "tr:nth-child(even){background:var(--bg3)}"
-        ".CONNECT{color:#4ec9b0}.DISCONNECT{color:#ce9178}"
-        ".READ{color:#569cd6}.WRITE{color:#dcdcaa}"
+        ".CONN{color:#4ec9b0}.DISC{color:#ce9178}"
+        ".RD{color:#569cd6}.WR{color:#dcdcaa}.HTTP{color:#c792ea}"
         ".dt{font-size:10px;color:var(--tx2)}"
         ".lbl{font-size:11px;color:var(--tx2);margin-bottom:4px}"
         ".cur{font-size:18px;color:var(--hdr);margin-bottom:12px;min-height:24px}"
@@ -311,8 +359,13 @@ static esp_err_t root_handler(httpd_req_t *req)
         "padding:5px 8px;font-family:monospace;font-size:13px;width:100%;margin-bottom:8px}"
         ".row{display:flex;gap:8px;align-items:center;margin-bottom:10px}"
         ".row:last-child{margin-bottom:0}"
+        ".row button{flex:1}"
         ".lbl2{flex:0 0 130px;font-size:12px;color:var(--tx2)}"
-        "@media(max-width:480px){td,th{padding:3px 4px;font-size:11px}}"
+        ".anim-row{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:10px}"
+        ".anim-row button{font-size:11px;padding:4px 2px}"
+        "@media(max-width:480px){"
+        "td,th{padding:3px 4px;font-size:11px}"
+        ".anim-row{grid-template-columns:repeat(3,1fr)}}"
         "</style>"
         "<script>var t=localStorage.getItem('t')||'dark';"
         "if(t==='light')document.documentElement.className='light';"
@@ -337,44 +390,50 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<button onclick='writeVal()'>Write to NVS</button>"
         "<hr style='border:none;border-top:1px solid var(--bd);margin:12px 0'>"
         "<div class='lbl'>LED Color:</div>"
-        "<div id='clrPrev' style='height:22px;border-radius:3px;margin-bottom:8px;"
-        "border:1px solid var(--bd);background:#ff0000'></div>"
-        "<div class='row'>"
-        "<span id='labR' style='flex:0 0 42px;font-size:11px;color:#f77'>R: 255</span>"
-        "<input type='range' id='slR' min='0' max='255' value='255' style='flex:1;"
-        "accent-color:#f77' oninput='upClr()'>"
-        "</div>"
-        "<div class='row'>"
-        "<span id='labG' style='flex:0 0 42px;font-size:11px;color:#7f7'>G: 0</span>"
-        "<input type='range' id='slG' min='0' max='255' value='0' style='flex:1;"
-        "accent-color:#7f7' oninput='upClr()'>"
-        "</div>"
-        "<div class='row'>"
-        "<span id='labB' style='flex:0 0 42px;font-size:11px;color:#77f'>B: 0</span>"
-        "<input type='range' id='slB' min='0' max='255' value='0' style='flex:1;"
-        "accent-color:#77f' oninput='upClr()'>"
-        "</div>"
+        "<canvas id='cpick' height='150'"
+        " style='cursor:crosshair;border-radius:3px;border:1px solid var(--bd);"
+        "margin-bottom:8px;touch-action:none;display:block;width:100%'></canvas>"
         "<button onclick='setLedColor()' style='margin-bottom:10px'>Set Color</button>"
         "<div class='lbl'>LED Animation:</div>"
-        "<div class='row'>"
-        "<button id='btnOff'    onclick='setLedAnim(\"off\")'>Off</button>"
-        "<button id='btnFade'   onclick='setLedAnim(\"fade\")'>Fade</button>"
-        "<button id='btnFire'   onclick='setLedAnim(\"fire\")'>Fire</button>"
-        "<button id='btnRainbow' onclick='setLedAnim(\"rainbow\")'>Rainbow</button>"
+        "<div class='anim-row'>"
+        "<button id='btnFade'      onclick='setLedAnim(\"fade\")'>Fade</button>"
+        "<button id='btnFire'      onclick='setLedAnim(\"fire\")'>Fire</button>"
+        "<button id='btnRainbow'   onclick='setLedAnim(\"rainbow\")'>Rainbow</button>"
+        "<button id='btnHeartbeat' onclick='setLedAnim(\"heartbeat\")'>Heartbeat</button>"
+        "<button id='btnBreathe'   onclick='setLedAnim(\"breathe\")'>Breathe</button>"
+        "<button id='btnMorse'     onclick='setLedAnim(\"morse\")'>Morse</button>"
         "</div>"
         "</div>"
         "<div class='pane' id='p1'>"
+        "<div style='flex:1;overflow-y:auto;min-height:0'>"
         "<table><thead>"
-        "<tr><th>Time</th><th>Event</th><th>Device</th><th>Char</th><th>Data</th></tr>"
+        "<tr><th>Time</th><th>Event</th><th>Device</th><th>Data</th></tr>"
         "</thead><tbody id='tb'></tbody></table>"
+        "</div>"
+        "<div style='padding-top:8px;text-align:right'>"
+        "<button class='danger' onclick='clr()'>Clear Log</button></div>"
         "</div>"
         "<div class='pane' id='p2'>"
         "<div class='row'><span class='lbl2'>BLE Advertising:</span><button id='bBle'>...</button></div>"
         "<div class='row'><span class='lbl2'>Event Logging:</span><button id='bLog'>...</button></div>"
-        "<div class='row'><span class='lbl2'>Log Entries:</span><button onclick='clr()'>Clear Log</button></div>"
         "<div class='row'><span class='lbl2'>UI Theme:</span><button onclick='tTheme()'>Toggle Theme</button></div>"
         "<div class='row'><span class='lbl2'>WiFi:</span>"
         "<button class='danger' onclick='rstWifi()'>Reset WiFi</button></div>"
+        "<hr style='border:none;border-top:1px solid var(--bd);margin:10px 0'>"
+        "<div class='lbl'>Morse thresholds (ms) &mdash; "
+        "<a href='https://play.google.com/store/apps/details?id=com.wuangxkee.graduationproject'"
+        " style='color:var(--hdr)' target='_blank'>Flash Morse Code</a>:</div>"
+        "<div class='row'><span class='lbl2'>Dot / Dash:</span>"
+        "<input class='inp' id='mT1' type='number' min='50' max='1500'"
+        " style='flex:1;margin-bottom:0'></div>"
+        "<div class='row'><span class='lbl2'>Sym / Letter:</span>"
+        "<input class='inp' id='mT2' type='number' min='50' max='1500'"
+        " style='flex:1;margin-bottom:0'></div>"
+        "<div class='row'><span class='lbl2'>Letter / Word:</span>"
+        "<input class='inp' id='mT3' type='number' min='200' max='3000'"
+        " style='flex:1;margin-bottom:0'></div>"
+        "<div class='row'><span class='lbl2'></span>"
+        "<button onclick='saveMorse()'>Apply</button></div>"
         "</div>"
         "<script>"
         "var TT=[['t0','p0'],['t1','p1'],['t2','p2']];"
@@ -385,7 +444,8 @@ static esp_err_t root_handler(httpd_req_t *req)
         "document.getElementById(p[1]).className='pane';});"
         "this.className='tab active';"
         "document.getElementById(pair[1]).className='pane active';"
-        "localStorage.setItem('tab',pair[0]);};});"
+        "localStorage.setItem('tab',pair[0]);"
+        "if(pair[0]==='t0')setTimeout(resizePick,0);};});"
         "(function(){var s=localStorage.getItem('tab');"
         "if(s&&s!=='t0'){var e=document.getElementById(s);if(e)e.click();}})();"
         "var on=true,ln=true;"
@@ -419,40 +479,104 @@ static esp_err_t root_handler(httpd_req_t *req)
         "fetch('/value',{method:'POST',body:v}).then(r=>r.json()).then(d=>{"
         "document.getElementById('curVal').textContent=d.value;"
         "document.getElementById('newVal').value='';});}"
-        "var ledAnims=['btnOff','btnFade','btnFire','btnRainbow'];"
+        "var ledAnims=['btnFade','btnFire','btnRainbow','btnHeartbeat','btnBreathe','btnMorse'];"
+        "var ledIds={'fade':'btnFade','fire':'btnFire','rainbow':'btnRainbow',"
+        "'heartbeat':'btnHeartbeat','breathe':'btnBreathe','morse':'btnMorse'};"
         "function setLedActive(id){"
         "ledAnims.forEach(function(a){document.getElementById(a).className='';});"
         "if(id)document.getElementById(id).className='on';}"
-        "function upClr(){"
-        "var r=document.getElementById('slR').value|0;"
-        "var g=document.getElementById('slG').value|0;"
-        "var b=document.getElementById('slB').value|0;"
-        "document.getElementById('labR').textContent='R: '+r;"
-        "document.getElementById('labG').textContent='G: '+g;"
-        "document.getElementById('labB').textContent='B: '+b;"
-        "var h=((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');"
-        "document.getElementById('clrPrev').style.background='#'+h;}"
+        "var _h=0,_s=1,_v=1,_dirty=false,resizePick,morseLoaded=false;"
+        "function hsv2hex(h,s,v){"
+        "var r,g,b,i=Math.floor(h*6),f=h*6-i,"
+        "p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);"
+        "switch(i%6){case 0:r=v,g=t,b=p;break;case 1:r=q,g=v,b=p;break;"
+        "case 2:r=p,g=v,b=t;break;case 3:r=p,g=q,b=v;break;"
+        "case 4:r=t,g=p,b=v;break;case 5:r=v,g=p,b=q;}"
+        "return((r*255|0)<<16|(g*255|0)<<8|(b*255|0)).toString(16).padStart(6,'0');}"
+        "function drawPick(){"
+        "var cv=document.getElementById('cpick'),ctx=cv.getContext('2d');"
+        "var w=cv.width,h=cv.height,hs=20,sv=h-hs;"
+        "var g1=ctx.createLinearGradient(0,0,w,0);"
+        "g1.addColorStop(0,'#fff');"
+        "g1.addColorStop(1,'hsl('+(_h*360)+',100%,50%)');"
+        "ctx.fillStyle=g1;ctx.fillRect(0,0,w,sv);"
+        "var g2=ctx.createLinearGradient(0,0,0,sv);"
+        "g2.addColorStop(0,'rgba(0,0,0,0)');g2.addColorStop(1,'#000');"
+        "ctx.fillStyle=g2;ctx.fillRect(0,0,w,sv);"
+        "var gh=ctx.createLinearGradient(0,0,w,0);"
+        "[0,1/6,2/6,3/6,4/6,5/6,1].forEach(function(t){"
+        "gh.addColorStop(t,'hsl('+(t*360)+',100%,50%)');});"
+        "ctx.fillStyle=gh;ctx.fillRect(0,sv,w,hs);"
+        "ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=1.5;"
+        "ctx.beginPath();ctx.arc(_s*w,(1-_v)*sv,6,0,Math.PI*2);ctx.stroke();"
+        "ctx.beginPath();ctx.arc(_h*w,sv+hs/2,6,0,Math.PI*2);ctx.stroke();}"
+        "function pickAt(x,y){"
+        "_dirty=true;"
+        "var cv=document.getElementById('cpick'),hs=20,sv=cv.height-hs;"
+        "var r=cv.getBoundingClientRect();"
+        "var cx=x-r.left,cy=y-r.top;"
+        "if(cy<sv){_s=Math.max(0,Math.min(1,cx/cv.width));"
+        "_v=Math.max(0,Math.min(1,1-cy/sv));}"
+        "else{_h=Math.max(0,Math.min(0.9999,cx/cv.width));}"
+        "drawPick();}"
+        "(function(){"
+        "var cv=document.getElementById('cpick');"
+        "cv.addEventListener('mousedown',function(e){"
+        "pickAt(e.clientX,e.clientY);"
+        "function mv(e){pickAt(e.clientX,e.clientY);}"
+        "function up(){document.removeEventListener('mousemove',mv);"
+        "document.removeEventListener('mouseup',up);}"
+        "document.addEventListener('mousemove',mv);"
+        "document.addEventListener('mouseup',up);});"
+        "cv.addEventListener('touchstart',function(e){"
+        "e.preventDefault();pickAt(e.touches[0].clientX,e.touches[0].clientY);"
+        "},{passive:false});"
+        "cv.addEventListener('touchmove',function(e){"
+        "e.preventDefault();pickAt(e.touches[0].clientX,e.touches[0].clientY);"
+        "},{passive:false});"
+        "resizePick=function(){"
+        "var cv=document.getElementById('cpick');"
+        "var w=cv.parentElement.getBoundingClientRect().width;"
+        "if(w>0){cv.width=Math.round(w);drawPick();}}"
+        ";"
+        "resizePick();"
+        "window.addEventListener('resize',resizePick);"
+        "})();"
         "function setLedColor(){"
-        "var r=document.getElementById('slR').value|0;"
-        "var g=document.getElementById('slG').value|0;"
-        "var b=document.getElementById('slB').value|0;"
-        "var h=((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');"
+        "var h=hsv2hex(_h,_s,_v);"
+        "_dirty=false;"
         "fetch('/led/color',{method:'POST',body:h}).then(function(){setLedActive(null);});}"
         "function setLedAnim(a){"
-        "var ids={'off':'btnOff','fade':'btnFade','fire':'btnFire','rainbow':'btnRainbow'};"
-        "fetch('/led/anim',{method:'POST',body:a}).then(function(){setLedActive(ids[a]);});}"
-        "function setSliders(h){"
-        "document.getElementById('slR').value=parseInt(h.substring(0,2),16);"
-        "document.getElementById('slG').value=parseInt(h.substring(2,4),16);"
-        "document.getElementById('slB').value=parseInt(h.substring(4,6),16);"
-        "upClr();}"
+        "fetch('/led/anim',{method:'POST',body:a}).then(function(){setLedActive(ledIds[a]||null);});}"
+        "function setColor(h){"
+        "if(_dirty)return;"
+        "var r=parseInt(h.substring(0,2),16)/255,"
+        "g=parseInt(h.substring(2,4),16)/255,"
+        "b=parseInt(h.substring(4,6),16)/255;"
+        "var mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;"
+        "_v=mx;_s=mx?d/mx:0;"
+        "if(!d){_h=0;}else if(mx===r){_h=((g-b)/d+6)%6/6;}"
+        "else if(mx===g){_h=((b-r)/d+2)/6;}"
+        "else{_h=((r-g)/d+4)/6;}"
+        "drawPick();}"
+        "function saveMorse(){"
+        "fetch('/morse/cfg',{method:'POST',"
+        "body:'t1='+document.getElementById('mT1').value"
+        "+'&t2='+document.getElementById('mT2').value"
+        "+'&t3='+document.getElementById('mT3').value});}"
         "function fState(){"
         "fetch('/state').then(r=>r.json()).then(s=>{"
         "on=s.ble;ln=s.log;"
         "document.documentElement.className=s.theme==='light'?'light':'';"
         "localStorage.setItem('t',s.theme);"
         "upBtns();"
-        "if(s.led&&s.led.length===6)setSliders(s.led);});}"
+        "if(s.led&&s.led.length===6){setColor(s.led);setLedActive(null);}"
+        "else if(s.led)setLedActive(ledIds[s.led]||null);"
+        "if(s.morse&&!morseLoaded){"
+        "document.getElementById('mT1').value=s.morse.t1;"
+        "document.getElementById('mT2').value=s.morse.t2;"
+        "document.getElementById('mT3').value=s.morse.t3;"
+        "morseLoaded=true;}});}"
         "function upd(){"
         "fetch('/log').then(r=>r.json()).then(d=>{"
         "var h='';"
@@ -460,11 +584,11 @@ static esp_err_t root_handler(httpd_req_t *req)
         "var e=d[i];"
         "h+='<tr><td><span class=\"dt\">'+e.date+'</span><br>'+e.time+'</td>'"
         "+'<td class=\"'+e.ev+'\">'+e.ev+'</td>'"
-        "+'<td>'+e.dev+'</td><td>'+e.ch+'</td><td>'+e.d+'</td></tr>';}"
+        "+'<td>'+e.dev+'</td><td>'+e.d+'</td></tr>';}"
         "document.getElementById('tb').innerHTML=h;"
         "});}"
         "fState();loadVal();upd();"
-        "setInterval(function(){loadVal();upd();},2000);"
+        "setInterval(function(){loadVal();upd();fState();},2000);"
         "</script></body></html>";
 
     httpd_resp_set_type(req, "text/html");
@@ -493,6 +617,10 @@ static esp_err_t value_post_handler(httpd_req_t *req)
     }
     body[recv] = '\0';
     ble_set_value(body);
+    led_ctrl_set_morse_text(body);  // keep Morse in sync if active
+    char wdesc[32];
+    snprintf(wdesc, sizeof(wdesc), "Val: %.24s", body);
+    web_log_action(wdesc);
 
     char val[BLE_MAX_VALUE_LEN + 1];
     ble_get_value(val, sizeof(val));
@@ -510,18 +638,60 @@ static esp_err_t led_color_handler(httpd_req_t *req)
     if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
     body[recv] = '\0';
     led_ctrl_apply_command(body);
+    char desc[16];
+    snprintf(desc, sizeof(desc), "LED #%s", body);
+    web_log_action(desc);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
-// POST /led/anim - body: "fade" | "fire" | "rainbow" | "off"
+// POST /led/anim - body: "fade" | "fire" | "rainbow" | "off" | "heartbeat" | "breathe" | "morse"
 static esp_err_t led_anim_handler(httpd_req_t *req)
 {
-    char body[10] = {0};
+    char body[12] = {0};
     int  recv = httpd_req_recv(req, body, sizeof(body) - 1);
     if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
     body[recv] = '\0';
+    if (strcmp(body, "morse") == 0) {
+        // Use current BLE characteristic value as Morse text
+        char val[BLE_MAX_VALUE_LEN + 1];
+        ble_get_value(val, sizeof(val));
+        led_ctrl_set_morse_text(val);
+    }
     led_ctrl_apply_command(body);
+    char desc[20];
+    snprintf(desc, sizeof(desc), "Anim: %s", body);
+    web_log_action(desc);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /morse/cfg - body: "dot=NNN&dash=NNN&sym=NNN&char_g=NNN&word_g=NNN"
+static esp_err_t morse_cfg_handler(httpd_req_t *req)
+{
+    char body[80] = {0};
+    int recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv < 0) { httpd_resp_send_500(req); return ESP_FAIL; }
+    body[recv] = '\0';
+
+    morse_cfg_t cfg;
+    led_ctrl_get_morse_timing(&cfg);  // start from current values
+
+    char *p;
+    #define PARSE_FIELD(key, field, lo, hi) \
+        p = strstr(body, key "="); \
+        if (p) { \
+            int v = atoi(p + sizeof(key)); \
+            if (v >= (lo) && v <= (hi)) cfg.field = (uint16_t)v; \
+        }
+
+    PARSE_FIELD("t1", t1_ms,  50, 1500)
+    PARSE_FIELD("t2", t2_ms,  50, 1500)
+    PARSE_FIELD("t3", t3_ms, 200, 3000)
+    #undef PARSE_FIELD
+
+    led_ctrl_set_morse_timing(&cfg);
+    web_log_action("Morse cfg saved");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
@@ -568,11 +738,15 @@ static esp_err_t log_handler(httpd_req_t *req)
         format_timestamp(e->timestamp, date_str, sizeof(date_str),
                          time_str, sizeof(time_str));
 
-        char dev_str[20] = "unknown";
-        if (e->device_idx < device_count) {
+        char dev_str[20];
+        if (e->device_idx == 0xFF) {
+            strcpy(dev_str, "Web UI");
+        } else if (e->device_idx < device_count) {
             uint8_t *a = device_addrs[e->device_idx];
             snprintf(dev_str, sizeof(dev_str), "%02X:%02X:%02X:%02X:%02X:%02X",
                      a[0], a[1], a[2], a[3], a[4], a[5]);
+        } else {
+            strcpy(dev_str, "unknown");
         }
 
         char char_str[12] = "-";
@@ -604,16 +778,21 @@ static esp_err_t log_handler(httpd_req_t *req)
     return ret;
 }
 
-// Return current state as JSON {ble, log, theme, led}
+// Return current state as JSON {ble, log, theme, led, morse:{...}}
 static esp_err_t state_handler(httpd_req_t *req)
 {
-    char led_cmd[9] = {0};
+    char led_cmd[12] = {0};
     led_ctrl_get_command(led_cmd, sizeof(led_cmd));
-    char buf[96];
-    snprintf(buf, sizeof(buf), "{\"ble\":%s,\"log\":%s,\"theme\":\"%s\",\"led\":\"%s\"}",
+    morse_cfg_t mcfg;
+    led_ctrl_get_morse_timing(&mcfg);
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"ble\":%s,\"log\":%s,\"theme\":\"%s\",\"led\":\"%s\","
+             "\"morse\":{\"t1\":%u,\"t2\":%u,\"t3\":%u}}",
              s_ble_enabled ? "true" : "false",
              s_log_enabled ? "true" : "false",
-             s_theme, led_cmd);
+             s_theme, led_cmd,
+             mcfg.t1_ms, mcfg.t2_ms, mcfg.t3_ms);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
 }
@@ -630,6 +809,7 @@ static esp_err_t ble_ctrl_handler(httpd_req_t *req)
     s_ble_enabled = new_state;
     cfg_save_u8("ble_en", new_state ? 1 : 0);
     if (s_ble_ctrl_cb) s_ble_ctrl_cb(new_state);
+    web_log_action(new_state ? "BLE: ON" : "BLE: OFF");
 
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"ble\":%s}", new_state ? "true" : "false");
@@ -651,6 +831,7 @@ static esp_err_t log_ctrl_handler(httpd_req_t *req)
         xSemaphoreGive(log_mutex);
     }
     cfg_save_u8("log_en", new_state ? 1 : 0);
+    web_log_action(new_state ? "Log: ON" : "Log: OFF");
 
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"log\":%s}", new_state ? "true" : "false");
@@ -689,6 +870,7 @@ static esp_err_t clear_handler(httpd_req_t *req)
         char_count    = 0;
         xSemaphoreGive(log_mutex);
     }
+    web_log_action("Log cleared");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
@@ -696,6 +878,7 @@ static esp_err_t clear_handler(httpd_req_t *req)
 // POST - erase WiFi credentials and reboot into provisioning mode
 static esp_err_t reset_wifi_handler(httpd_req_t *req)
 {
+    web_log_action("WiFi reset");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
     if (s_wifi_reset_cb) s_wifi_reset_cb();
@@ -733,7 +916,7 @@ void web_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable  = true;
-    config.max_uri_handlers  = 14;
+    config.max_uri_handlers  = 15;
     config.stack_size        = 8192;
 
     httpd_handle_t server = NULL;
@@ -757,6 +940,7 @@ void web_server_start(void)
         { "/value",        HTTP_POST, value_post_handler, NULL },
         { "/led/color",   HTTP_POST, led_color_handler,  NULL },
         { "/led/anim",    HTTP_POST, led_anim_handler,   NULL },
+        { "/morse/cfg",   HTTP_POST, morse_cfg_handler,  NULL },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(server, &uris[i]);

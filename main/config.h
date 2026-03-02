@@ -13,7 +13,16 @@
 #define BLE_CHAR_UUID           0xFF01  // R/W characteristic: persistent string value
 #define BLE_LED_CHAR_UUID       0xFF03  // R/W characteristic: "RRGGBB" or "fade"/"fire"/"rainbow"/"off"
 #define BLE_MAX_VALUE_LEN       20
-#define BLE_LED_CMD_MAX_LEN     8       // longest command: "rainbow" = 7 chars
+#define BLE_LED_CMD_MAX_LEN     12      // longest command: "heartbeat" = 9 chars
+
+// --- Morse decoder thresholds (match "Flash Morse Code" app slider values) ---
+// App algorithm:  signal ≤ T1 → dot,  signal > T1 → dash
+//                 gap    ≤ T2 → sym,  T2 < gap ≤ T3 → char,  gap > T3 → word
+// Firmware derives actual on/off durations automatically with comfortable margins.
+// Defaults tuned for comfortable reception.
+#define MORSE_DEFAULT_T1_MS  120   // Dot/Dash threshold   (app slider 1)
+#define MORSE_DEFAULT_T2_MS  220   // Sym/Letter threshold (app slider 2)
+#define MORSE_DEFAULT_T3_MS  350   // Letter/Word threshold(app slider 3)
 
 #define BLE_DEFAULT_VALUE       "hello"
 

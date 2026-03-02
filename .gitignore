@@ -69,6 +69,7 @@ compile_commands.json
 CLAUDE.md
 .claude/
 .vscode/
+dialogue.txt
 
 # Windows specific
 Thumbs.db
@@ -80,3 +81,4 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+text.txt

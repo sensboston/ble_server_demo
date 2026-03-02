@@ -51,17 +51,34 @@ Accepts commands via BLE (`0xFF03`) or the web UI:
 | `fade` | Smooth HSV hue sweep (~12 s cycle) |
 | `rainbow` | Fast hue cycle (~3 s) |
 | `fire` | Warm red/orange flicker |
+| `heartbeat` | Double-beat pulse (red), ~1.1 s period |
+| `breathe` | Triangle-wave brightness, cool blue, ~4 s cycle |
+| `morse` | Transmit the 0xFF01 value as Morse code (amber LED) |
 | `off` | Return to BLE status indication mode |
 
 The last set color is restored from NVS on reboot.
+
+### Morse Code
+
+Writing `morse` to characteristic `0xFF03` (or pressing the **Morse** button in the web UI) begins transmitting the current 0xFF01 string as Morse code using the WS2812 LED. Cyrillic text is automatically transliterated to Latin before encoding.
+
+All timing parameters are adjustable in the **Settings** tab and persisted to NVS:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Dot | 150 ms | Dot element duration |
+| Dash | 500 ms | Dash element duration |
+| Sym gap | 100 ms | Gap between elements within a character |
+| Char gap | 500 ms | Gap between characters |
+| Word gap | 900 ms | Total silence between words |
 
 ### Web Monitor (`http://<device-ip>/`)
 
 Tabbed interface, dark/light theme, mobile-friendly:
 
-- **Demo tab** — RGB sliders with live color preview; one-click animation buttons (Fade/Fire/Rainbow/Off)
+- **Demo tab** — RGB color picker; animation buttons (Fade/Fire/Rainbow/Heartbeat/Breathe/Morse/Off); write BLE value
 - **Log tab** — live BLE event log with timestamps (real time after NTP sync, boot-relative before)
-- **Settings tab** — toggle BLE on/off, trigger WiFi credential reset
+- **Settings tab** — toggle BLE on/off, toggle logging, reset WiFi, configure Morse timing
 
 ### WiFi Provisioning (Captive Portal)
 
@@ -95,7 +112,7 @@ main/
   config.h         — all tunable constants (UUIDs, GPIO, OLED, task stacks, log size)
   main.c           — app_main: NVS init, LED init, OLED init, launch BLE + WiFi tasks
   ble_server.c     — GATT server: data characteristic + LED control characteristic
-  led_controller.c — WS2812 driver: static color, animations, NVS persistence
+  led_controller.c — WS2812 driver: static color, animations, Morse code, NVS persistence
   wifi_manager.c   — captive portal provisioning + normal STA connection
   ntp_sync.c       — SNTP client
   web_server.c     — HTTP monitor: tabbed UI, ring-buffer event log, LED control

@@ -10,6 +10,7 @@ typedef enum {
     BLE_EVT_DISCONNECT = 1,
     BLE_EVT_READ       = 2,
     BLE_EVT_WRITE      = 3,
+    WEB_EVT_ACTION     = 4, // Web UI action (LED, value, settings)
 } ble_event_type_t;
 
 // Compact log entry - 9 bytes per record
@@ -31,6 +32,9 @@ typedef void (*web_wifi_reset_cb_t)(void);
 
 // Initialize logging mutex and load persisted config - call once in app_main before any tasks start
 void web_log_init(void);
+
+// Log boot time with actual wall-clock timestamp (call from NTP sync callback)
+void web_log_boot(void);
 
 // Register callback invoked when the web UI toggles BLE on/off
 void web_set_ble_ctrl_cb(web_ble_ctrl_cb_t cb);

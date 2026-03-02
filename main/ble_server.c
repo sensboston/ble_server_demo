@@ -229,7 +229,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                  param->read.conn_id, param->read.handle);
 
         if (param->read.handle == led_char_handle) {
-            char led_cmd[9] = {0};
+            char led_cmd[12] = {0};
             led_ctrl_get_command(led_cmd, sizeof(led_cmd));
             esp_gatt_rsp_t rsp = {0};
             rsp.attr_value.handle = param->read.handle;
@@ -265,6 +265,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             char cmd[BLE_LED_CMD_MAX_LEN + 1] = {0};
             memcpy(cmd, param->write.value, cmd_len);
             ESP_LOGI(TAG, "LED command via BLE: %s", cmd);
+            if (strcmp(cmd, "morse") == 0)
+                led_ctrl_set_morse_text(cached_value);  // use current 0xFF01 value
             led_ctrl_apply_command(cmd);
             if (param->write.need_rsp)
                 esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
@@ -279,6 +281,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                      ? param->write.len : BLE_MAX_VALUE_LEN;
         memcpy(cached_value, param->write.value, cached_len);
         cached_value[cached_len] = '\0';
+        led_ctrl_set_morse_text(cached_value);  // keep Morse in sync if active
 
         // Send response immediately — NVS write below can take 20-50 ms and
         // must not block the BLE callback task before the client gets an ACK.

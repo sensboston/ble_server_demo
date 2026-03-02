@@ -1,9 +1,17 @@
 #include "ntp_sync.h"
+#include "web_server.h"
 #include "config.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 
 #define TAG "NTP_SYNC"
+
+static void ntp_sync_cb(struct timeval *tv)
+{
+    (void)tv;
+    web_log_boot();  // log actual boot time now that wall-clock is known
+    ESP_LOGI(TAG, "Time synchronized");
+}
 
 void ntp_sync_start(void)
 {
@@ -12,6 +20,7 @@ void ntp_sync_start(void)
     tzset();
 
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER);
+    config.sync_cb = ntp_sync_cb;
     esp_netif_sntp_init(&config);
 
     ESP_LOGI(TAG, "NTP sync started, server: %s, timezone: %s (zip: %s)",
